@@ -141,21 +141,54 @@ def _write_category_summary(ws, row: int, label: str, oh: int, wip: int,
 
 
 def _write_block_header(ws, row: int):
+    """Write grey STYLE header row — matching original raw format exactly."""
     headers = {3: "STYLE", 4: "COLOR", 5: "SIZE SCALE",
                12: "ON HAND", 13: "WIP", 14: "AVAILABILITY", 15: "MSRP"}
-    ws.merge_cells(f'E{row}:K{row}')
+    # Grey fill only on cols 3-15 (not 1-2 which are image area)
+    for col in range(3, 16):
+        c = ws.cell(row=row, column=col)
+        c.fill = GREY_FILL
+        c.font = NORMAL_FONT
+        c.alignment = CENTER_ALIGN
+    # Set header labels
     for col, label in headers.items():
-        cell = ws.cell(row=row, column=col, value=label)
-        cell.fill = GREY_FILL
-        cell.font = NORMAL_FONT
-        cell.alignment = CENTER_ALIGN
-    for col in range(1, 16):
-        ws.cell(row=row, column=col).fill = GREY_FILL
+        ws.cell(row=row, column=col, value=label)
+    # Borders: thin all 4 sides on C, D, O; thin left+top+bottom on E; thin top+bottom on F-K;
+    # thin left+top+bottom on L-N (no top on L-N per original)
+    for col in [3, 4, 15]:
+        ws.cell(row=row, column=col).border = THIN_BORDER
+    ws.cell(row=row, column=5).border = Border(
+        left=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    for col in range(6, 12):
+        ws.cell(row=row, column=col).border = Border(
+            top=Side(style='thin'), bottom=Side(style='thin'))
+    for col in [12, 13, 14]:
+        ws.cell(row=row, column=col).border = Border(
+            left=Side(style='thin'), right=Side(style='thin'), bottom=Side(style='thin'))
 
 
 def _write_data_rows(ws, start_row: int, rows_data: list) -> int:
+    """Write style data rows — matching original raw format exactly.
+
+    Original border pattern:
+      Label rows (has OH): thin on left, right, top — NO bottom
+      Ratio rows (no OH):  thin on left, right, bottom — NO top
+    Number format: General (matching raw file, no forced #,##0)
+    """
+    # Border templates matching original
+    label_border_outer = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        top=Side(style='thin'))
+    label_border_inner = Border(top=Side(style='thin'))
+    ratio_border_outer = Border(
+        left=Side(style='thin'), right=Side(style='thin'),
+        bottom=Side(style='thin'))
+    ratio_border_inner = Border(bottom=Side(style='thin'))
+
     current_row = start_row
     for row_data in rows_data:
+        is_label = row_data.get("is_label_row", True)
+
         ws.cell(row=current_row, column=3, value=row_data["style_num"]).font = NORMAL_FONT
         ws.cell(row=current_row, column=4, value=row_data["color"]).font = NORMAL_FONT
 
@@ -166,17 +199,16 @@ def _write_data_rows(ws, start_row: int, rows_data: list) -> int:
                 cell.font = NORMAL_FONT
                 cell.alignment = CENTER_ALIGN
 
-        if row_data.get("is_label_row", True) and row_data["oh"] > 0:
+        if is_label and row_data["oh"] > 0:
             cell = ws.cell(row=current_row, column=12, value=row_data["oh"])
             cell.font = NORMAL_FONT
             cell.alignment = CENTER_ALIGN
-            cell.number_format = NUM_FMT
+            # General format — no forced #,##0
 
-        if row_data.get("is_label_row", True) and row_data["wip"] > 0:
+        if is_label and row_data["wip"] > 0:
             cell = ws.cell(row=current_row, column=13, value=row_data["wip"])
             cell.font = NORMAL_FONT
             cell.alignment = CENTER_ALIGN
-            cell.number_format = NUM_FMT
 
         avail = row_data.get("availability", "")
         if avail:
@@ -189,33 +221,63 @@ def _write_data_rows(ws, start_row: int, rows_data: list) -> int:
             cell.alignment = CENTER_ALIGN
             cell.number_format = PRICE_FMT
 
+        # Borders — match original pattern
+        if is_label:
+            for col in [3, 4, 12, 13, 14, 15]:
+                ws.cell(row=current_row, column=col).border = label_border_outer
+            ws.cell(row=current_row, column=5).border = Border(
+                left=Side(style='thin'), top=Side(style='thin'))
+            for col in range(6, 12):
+                ws.cell(row=current_row, column=col).border = label_border_inner
+        else:
+            for col in [3, 4, 12, 13, 14, 15]:
+                ws.cell(row=current_row, column=col).border = ratio_border_outer
+            ws.cell(row=current_row, column=5).border = Border(
+                left=Side(style='thin'), bottom=Side(style='thin'))
+            for col in range(6, 12):
+                ws.cell(row=current_row, column=col).border = ratio_border_inner
+
         current_row += 1
     return current_row
 
 
 def _write_total_row(ws, row: int, total_oh: int, total_wip: int):
-    """Write TOTAL row with OH, WIP, and combined total in N."""
+    """Write TOTAL row — matching original raw format exactly.
+
+    Original: grey fill cols 3-15 only, TOTAL text bold, values NOT bold,
+    General number format, specific border pattern.
+    """
+    # Grey fill only on cols 3-15 (not 1-2 image area)
+    for col in range(3, 16):
+        c = ws.cell(row=row, column=col)
+        c.fill = GREY_FILL
+        c.font = NORMAL_FONT
+
+    # TOTAL text — bold
     cell = ws.cell(row=row, column=3, value="TOTAL :")
-    cell.fill = GREY_FILL
     cell.font = BOLD_FONT
 
-    for col in range(1, 16):
-        ws.cell(row=row, column=col).fill = GREY_FILL
-
-    # OH
+    # OH — not bold, General format
     cell = ws.cell(row=row, column=12, value=total_oh)
-    cell.fill = GREY_FILL
-    cell.font = BOLD_FONT
     cell.alignment = CENTER_ALIGN
-    cell.number_format = NUM_FMT
 
     # WIP
     if total_wip > 0:
         cell = ws.cell(row=row, column=13, value=total_wip)
-        cell.fill = GREY_FILL
-        cell.font = BOLD_FONT
         cell.alignment = CENTER_ALIGN
-        cell.number_format = NUM_FMT
+
+    # Borders matching original: C,D = thin all 4; E = thin left+top+bottom;
+    # F-K = thin top+bottom; L-N = thin left+right+top+bottom; O = thin all 4
+    for col in [3, 4, 15]:
+        ws.cell(row=row, column=col).border = THIN_BORDER
+    ws.cell(row=row, column=5).border = Border(
+        left=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+    for col in range(6, 12):
+        ws.cell(row=row, column=col).border = Border(
+            top=Side(style='thin'), bottom=Side(style='thin'))
+    for col in [12, 13, 14]:
+        ws.cell(row=row, column=col).border = Border(
+            left=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
 
 def _add_product_image(ws, row: int, img_bytes: bytes):
