@@ -613,7 +613,8 @@ def write_recap_sheet(ws, recap_sections: list, title: str = ""):
 # ─── Main Generator ─────────────────────────────────────────────────────────
 
 def generate_ats_report(categories_by_sheet: Dict[str, dict],
-                        title: str = "", report_date: date = None) -> bytes:
+                        title: str = "", report_date: date = None,
+                        logo_image: bytes = None) -> bytes:
     """
     Generate the complete ATS report Excel file.
 
@@ -625,6 +626,7 @@ def generate_ats_report(categories_by_sheet: Dict[str, dict],
         },
         ...
     }
+    logo_image: bytes of the Haddad Brands logo (placed at A1 on each detail sheet)
     """
     wb = Workbook()
     ws_recap = wb.active
@@ -636,6 +638,13 @@ def generate_ats_report(categories_by_sheet: Dict[str, dict],
     for sheet_name, sheet_info in categories_by_sheet.items():
         ws = wb.create_sheet(title=sheet_name[:31])
         write_detail_sheet(ws, sheet_info["categories"], report_date=report_date)
+        # Add Haddad Brands logo at A1 (same position as original)
+        if logo_image:
+            try:
+                img = XlImage(io.BytesIO(logo_image))
+                ws.add_image(img, 'A1')
+            except Exception:
+                pass
 
     buf = io.BytesIO()
     wb.save(buf)

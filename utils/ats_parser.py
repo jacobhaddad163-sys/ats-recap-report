@@ -669,7 +669,22 @@ def parse_ats_file(file_bytes: bytes) -> dict:
     wb_fmt = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=False)
     all_images = _extract_images(file_bytes)
 
-    result = {"sheets": []}
+    result = {"sheets": [], "logo_image": None}
+
+    # Extract logo: the Haddad Brands logo is typically at row 1 of the first sheet
+    for sheet_name_check in wb.sheetnames:
+        logo_imgs = all_images.get(sheet_name_check, {})
+        if 1 in logo_imgs:
+            logo_data = logo_imgs[1]
+            try:
+                if Image is not None:
+                    logo_img = Image.open(io.BytesIO(logo_data))
+                    # Logo is wide (width > height) and small, not a product image
+                    if logo_img.size[0] > logo_img.size[1] and logo_img.size[1] < 200:
+                        result["logo_image"] = logo_data
+                        break
+            except Exception:
+                pass
 
     # Step 1: Identify raw data sheets - exclude "RECAP SHEET" (case-insensitive)
     data_sheet_names = []

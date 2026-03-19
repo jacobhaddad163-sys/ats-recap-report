@@ -225,8 +225,10 @@ if st.button("Generate ATS Recap Report", type="primary", key="generate_btn"):
                         "categories": filtered_cats,
                     }
 
+                logo = parsed.get("logo_image")
                 excel_bytes = generate_ats_report(categories_by_sheet,
-                                                   title=report_title, report_date=report_date)
+                                                   title=report_title, report_date=report_date,
+                                                   logo_image=logo)
 
                 st.session_state["output_excel"] = excel_bytes
                 st.session_state["output_filename"] = f"{report_title}.xlsx"
