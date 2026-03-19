@@ -86,7 +86,9 @@ if not check_rate_limit("upload", max_requests=30, window_seconds=3600):
     st.stop()
 
 # ─── Parse ────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=300, show_spinner="Parsing file...")
+# NOTE: Do NOT use @st.cache_data here — it serializes return values,
+# which strips binary image bytes from the parsed blocks.
+@st.cache_resource(ttl=300, show_spinner="Parsing file...")
 def cached_parse(fb):
     return parse_ats_file(fb)
 
