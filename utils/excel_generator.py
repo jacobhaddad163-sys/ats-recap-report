@@ -37,7 +37,7 @@ def _safe_cell_text(value: str) -> str:
 
 # ─── Style Constants ─────────────────────────────────────────────────────────
 YELLOW_FILL = PatternFill("solid", fgColor="FFFF00")
-GREY_FILL = PatternFill("solid", fgColor="D3D3D3")
+GREY_FILL = PatternFill("solid", fgColor="FFD3D3D3")
 WHITE_FILL = PatternFill("solid", fgColor="FFFFFF")
 LIGHT_BLUE_FILL = PatternFill("solid", fgColor="C0E6F5")
 
@@ -126,18 +126,7 @@ def _write_category_summary(ws, row: int, label: str, oh: int, wip: int,
         cell.font = BOLD_FONT
         cell.alignment = LEFT_ALIGN
 
-    # Bottom border on C:J for the 4-7 row (category boundary)
-    if label == "4-7":
-        bottom_border = Border(bottom=Side(style='thin'))
-        for col in range(3, 11):  # C through J
-            c = ws.cell(row=row, column=col)
-            if c.border and c.border != Border():
-                # Preserve existing borders, add bottom
-                c.border = Border(
-                    left=c.border.left, right=c.border.right,
-                    top=c.border.top, bottom=Side(style='thin'))
-            else:
-                c.border = bottom_border
+    # Note: original raw file has NO borders on C:J of the 4-7 summary row
 
 
 def _write_block_header(ws, row: int):
@@ -153,15 +142,15 @@ def _write_block_header(ws, row: int):
     # Set header labels
     for col, label in headers.items():
         ws.cell(row=row, column=col, value=label)
-    # Borders: thin all 4 sides on C, D, O; thin left+top+bottom on E; thin top+bottom on F-K;
-    # thin left+top+bottom on L-N (no top on L-N per original)
-    for col in [3, 4, 15]:
+    # Borders matching original exactly
+    for col in [3, 4, 5, 15]:
         ws.cell(row=row, column=col).border = THIN_BORDER
-    ws.cell(row=row, column=5).border = Border(
-        left=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-    for col in range(6, 12):
+    for col in range(6, 11):
         ws.cell(row=row, column=col).border = Border(
             top=Side(style='thin'), bottom=Side(style='thin'))
+    # Col K (11): right+top+bottom (forms boundary before ON HAND)
+    ws.cell(row=row, column=11).border = Border(
+        right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     for col in [12, 13, 14]:
         ws.cell(row=row, column=col).border = Border(
             left=Side(style='thin'), right=Side(style='thin'), bottom=Side(style='thin'))
@@ -221,21 +210,41 @@ def _write_data_rows(ws, start_row: int, rows_data: list) -> int:
             cell.alignment = CENTER_ALIGN
             cell.number_format = PRICE_FMT
 
-        # Borders — match original pattern
+        # Borders — match original raw file exactly per column
         if is_label:
-            for col in [3, 4, 12, 13, 14, 15]:
-                ws.cell(row=current_row, column=col).border = label_border_outer
+            # Label rows — match original border pattern exactly
+            for col in [3, 4]:
+                ws.cell(row=current_row, column=col).border = Border(
+                    left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'))
             ws.cell(row=current_row, column=5).border = Border(
                 left=Side(style='thin'), top=Side(style='thin'))
-            for col in range(6, 12):
-                ws.cell(row=current_row, column=col).border = label_border_inner
+            for col in range(6, 11):
+                ws.cell(row=current_row, column=col).border = Border(top=Side(style='thin'))
+            # Col K (11): right border only (boundary before ON HAND)
+            ws.cell(row=current_row, column=11).border = Border(
+                right=Side(style='thin'))
+            for col in [12, 13, 14, 15]:
+                ws.cell(row=current_row, column=col).border = Border(
+                    left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'))
         else:
-            for col in [3, 4, 12, 13, 14, 15]:
-                ws.cell(row=current_row, column=col).border = ratio_border_outer
+            # Ratio rows — match original border pattern exactly
+            for col in [3, 4]:
+                ws.cell(row=current_row, column=col).border = Border(
+                    left=Side(style='thin'), right=Side(style='thin'), bottom=Side(style='thin'))
             ws.cell(row=current_row, column=5).border = Border(
                 left=Side(style='thin'), bottom=Side(style='thin'))
-            for col in range(6, 12):
-                ws.cell(row=current_row, column=col).border = ratio_border_inner
+            for col in range(6, 11):
+                ws.cell(row=current_row, column=col).border = Border(bottom=Side(style='thin'))
+            # Col K (11): right+bottom border
+            ws.cell(row=current_row, column=11).border = Border(
+                right=Side(style='thin'), bottom=Side(style='thin'))
+            ws.cell(row=current_row, column=12).border = Border(
+                left=Side(style='thin'), right=Side(style='thin'))
+            for col in [13, 14]:
+                ws.cell(row=current_row, column=col).border = Border(
+                    left=Side(style='thin'), right=Side(style='thin'), bottom=Side(style='thin'))
+            ws.cell(row=current_row, column=15).border = Border(
+                left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'))
 
         current_row += 1
     return current_row
@@ -356,14 +365,17 @@ def write_detail_sheet(ws, categories: list, report_date: date = None):
 
         # Write all style blocks for this category
         for block in blocks:
+            block_header_row = current_row
             _write_block_header(ws, current_row)
+            # Place image at the STYLE header row in col A — matching original
+            # (original uses twoCellAnchor starting at the STYLE row, spanning ~10 rows)
+            if block.get("product_image"):
+                _add_product_image(ws, block_header_row, block["product_image"])
             current_row += 1
             current_row = _write_data_rows(ws, current_row, block["rows"])
             _write_total_row(ws, current_row, block["total_oh"], block["total_wip"])
             current_row += 1
-            if block.get("product_image"):
-                _add_product_image(ws, current_row, block["product_image"])
-            current_row += 8
+            current_row += 8  # spacing after TOTAL (image area)
 
         current_row += 2
 
