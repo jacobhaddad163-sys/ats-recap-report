@@ -153,7 +153,8 @@ def _write_block_header(ws, row: int):
         right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     for col in [12, 13, 14]:
         ws.cell(row=row, column=col).border = Border(
-            left=Side(style='thin'), right=Side(style='thin'), bottom=Side(style='thin'))
+            left=Side(style='thin'), right=Side(style='thin'),
+            top=Side(style='thin'), bottom=Side(style='thin'))
 
 
 def _write_data_rows(ws, start_row: int, rows_data: list) -> int:
