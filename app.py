@@ -197,7 +197,7 @@ if st.button("Generate ATS Recap Report", type="primary", key="generate_btn"):
                     # Count before
                     before = sum(
                         len([r for r in b["rows"] if r.get("is_label_row", True)])
-                        for c in raw_cats.values() for b in c["blocks"]
+                        for c in raw_cats for b in c["blocks"]
                     )
 
                     # Filter
@@ -206,7 +206,7 @@ if st.button("Generate ATS Recap Report", type="primary", key="generate_btn"):
                     # Count after
                     after = sum(
                         len([r for r in b["rows"] if r.get("is_label_row", True)])
-                        for c in filtered_cats.values() for b in c["blocks"]
+                        for c in filtered_cats for b in c["blocks"]
                     )
                     total_removed += (before - after)
 
