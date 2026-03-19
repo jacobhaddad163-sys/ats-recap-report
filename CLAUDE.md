@@ -78,14 +78,8 @@ ATS RECAP REPORT/
 - Omit size range row when no styles exist for that range
 - Category order preserved as user defines them
 
-## Related Apps (same architecture)
-- `C:\Users\jacobh\OneDrive - Haddad Brands\Confirmed Deals Recap\` — Confirmed Deals Recap Builder
-- `C:\Users\jacobh\OneDrive - Haddad Brands\GM Sheet Builder\` — GM Sheet Builder
-- `C:\Users\jacobh\Documents\StoreRecapBuilder\` — Store Recap Builder
-
 ## Running Locally
 ```bash
-cd "C:\Users\jacobh\OneDrive - Haddad Brands\ATS RECAP REPORT"
 pip install -r requirements.txt
 streamlit run app.py
 ```
