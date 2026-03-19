@@ -340,16 +340,16 @@ def write_detail_sheet(ws, categories: list, report_date: date = None):
         if not has_toddler and not has_boys47:
             continue
 
-        # OH/WIP/TOTAL column sub-headers (yellow, in K/L/M per spec)
-        for col, label in [(11, "OH"), (12, "WIP"), (13, "TOTAL")]:
+        # OH/WIP/TOTAL column sub-headers (yellow) — aligned above data columns
+        for col, label in [(12, "OH"), (13, "WIP"), (14, "TOTAL")]:
             cell = ws.cell(row=current_row, column=col, value=label)
             cell.fill = YELLOW_FILL
             cell.font = BOLD_FONT
             cell.alignment = CENTER_ALIGN
             cell.border = THIN_BORDER
-        # Col N also gets yellow fill and border (no label)
-        ws.cell(row=current_row, column=14).fill = YELLOW_FILL
-        ws.cell(row=current_row, column=14).border = THIN_BORDER
+        # Col K (11) also gets yellow fill and border (no label)
+        ws.cell(row=current_row, column=11).fill = YELLOW_FILL
+        ws.cell(row=current_row, column=11).border = THIN_BORDER
         current_row += 1
 
         # TODDLER summary row
