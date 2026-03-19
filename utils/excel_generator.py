@@ -52,9 +52,12 @@ THIN_BORDER = Border(
 CENTER_ALIGN = Alignment(horizontal='center', vertical='center')
 LEFT_ALIGN = Alignment(horizontal='left', vertical='center')
 RIGHT_ALIGN = Alignment(horizontal='right', vertical='center')
+WRAP_CENTER_ALIGN = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
 NUM_FMT = '#,##0'
+ACCT_NUM_FMT = '_(* #,##0_);_(* (#,##0);_(* "-"??_);_(@_)'
 PRICE_FMT = '#,##0.00'
+TEXT_FMT = '@'
 
 
 # ─── Detail Sheet ────────────────────────────────────────────────────────────
@@ -89,26 +92,32 @@ def _write_category_summary(ws, row: int, label: str, oh: int, wip: int,
     # Column K: size range label
     cell = ws.cell(row=row, column=11, value=label)
     cell.font = BOLD_FONT
-    cell.alignment = RIGHT_ALIGN
+    cell.alignment = CENTER_ALIGN
+    cell.border = THIN_BORDER
+    # "4-7" needs text format to prevent Excel date interpretation
+    if label == "4-7":
+        cell.number_format = TEXT_FMT
 
-    # Column L: OH
+    # Column L: OH — accounting format shows dash for zero
     cell = ws.cell(row=row, column=12, value=oh)
     cell.font = BOLD_FONT
     cell.alignment = CENTER_ALIGN
-    cell.number_format = NUM_FMT
+    cell.number_format = ACCT_NUM_FMT
+    cell.border = THIN_BORDER
 
-    # Column M: WIP — show dash for zero
-    cell = ws.cell(row=row, column=13, value=wip if wip > 0 else "-")
+    # Column M: WIP — accounting format shows dash for zero
+    cell = ws.cell(row=row, column=13, value=wip)
     cell.font = BOLD_FONT
     cell.alignment = CENTER_ALIGN
-    if wip > 0:
-        cell.number_format = NUM_FMT
+    cell.number_format = ACCT_NUM_FMT
+    cell.border = THIN_BORDER
 
     # Column N: Total
     cell = ws.cell(row=row, column=14, value=oh + wip)
     cell.font = BOLD_FONT
     cell.alignment = CENTER_ALIGN
-    cell.number_format = NUM_FMT
+    cell.number_format = ACCT_NUM_FMT
+    cell.border = THIN_BORDER
 
     # Category name in column A (yellow fill, bold)
     if is_category_row and category_name:
@@ -116,6 +125,19 @@ def _write_category_summary(ws, row: int, label: str, oh: int, wip: int,
         cell.fill = YELLOW_FILL
         cell.font = BOLD_FONT
         cell.alignment = LEFT_ALIGN
+
+    # Bottom border on C:J for the 4-7 row (category boundary)
+    if label == "4-7":
+        bottom_border = Border(bottom=Side(style='thin'))
+        for col in range(3, 11):  # C through J
+            c = ws.cell(row=row, column=col)
+            if c.border and c.border != Border():
+                # Preserve existing borders, add bottom
+                c.border = Border(
+                    left=c.border.left, right=c.border.right,
+                    top=c.border.top, bottom=Side(style='thin'))
+            else:
+                c.border = bottom_border
 
 
 def _write_block_header(ws, row: int):
@@ -226,12 +248,16 @@ def write_detail_sheet(ws, categories: list, report_date: date = None):
         if not has_toddler and not has_boys47:
             continue
 
-        # OH/WIP/TOTAL column headers (yellow)
-        for col, label in [(12, "OH"), (13, "WIP"), (14, "TOTAL")]:
+        # OH/WIP/TOTAL column sub-headers (yellow, in K/L/M per spec)
+        for col, label in [(11, "OH"), (12, "WIP"), (13, "TOTAL")]:
             cell = ws.cell(row=current_row, column=col, value=label)
             cell.fill = YELLOW_FILL
             cell.font = BOLD_FONT
             cell.alignment = CENTER_ALIGN
+            cell.border = THIN_BORDER
+        # Col N also gets yellow fill and border (no label)
+        ws.cell(row=current_row, column=14).fill = YELLOW_FILL
+        ws.cell(row=current_row, column=14).border = THIN_BORDER
         current_row += 1
 
         # TODDLER summary row
@@ -263,7 +289,7 @@ def write_detail_sheet(ws, categories: list, report_date: date = None):
 # ─── RECAP Sheet ─────────────────────────────────────────────────────────────
 
 def _set_recap_col_widths(ws):
-    widths = {'A': 27, 'B': 20, 'C': 34, 'D': 46, 'E': 13, 'F': 13, 'G': 13}
+    widths = {'A': 20.5, 'B': 15.3, 'C': 26.0, 'D': 35.2, 'E': 9.9, 'F': 9.9, 'G': 9.9}
     for col_letter, width in widths.items():
         ws.column_dimensions[col_letter].width = width
 
@@ -271,12 +297,19 @@ def _set_recap_col_widths(ws):
 def write_recap_sheet(ws, recap_sections: list, title: str = ""):
     _set_recap_col_widths(ws)
 
-    # Row 1: Title
-    ws.merge_cells('A1:G1')
-    cell = ws.cell(row=1, column=1, value=_safe_cell_text(title.upper() if title else "ATS RECAP"))
-    cell.fill = YELLOW_FILL
-    cell.font = BOLD_FONT
-    cell.alignment = CENTER_ALIGN
+    # Collect merge ranges — apply them at the very end so all cell styling
+    # happens on real Cell objects (not MergedCell proxies).
+    pending_merges = []
+
+    # Row 1: Title — style ALL cells in the range before merging
+    for col in range(1, 8):
+        c = ws.cell(row=1, column=col)
+        c.fill = YELLOW_FILL
+        c.font = BOLD_FONT
+        c.alignment = CENTER_ALIGN
+        c.border = THIN_BORDER
+    ws.cell(row=1, column=1, value=_safe_cell_text(title.upper() if title else "ATS RECAP"))
+    pending_merges.append('A1:G1')
 
     # Row 2: Headers
     headers = ["BRAND", "SIZE RANGE", "CATEGORY", "REF #", "OH", "WIP", "TOTAL ATS"]
@@ -299,13 +332,16 @@ def write_recap_sheet(ws, recap_sections: list, title: str = ""):
 
         section_start_row = current_row
 
-        # Group rows by category for merging
+        # Group rows by category for merging.
+        # Use cat_id (unique per category entry) to keep same-named categories
+        # separate — spec says duplicate category names are SEPARATE entries.
         cat_groups = []
-        current_cat = None
+        current_cat_id = None
         for row_data in rows:
-            if row_data["category"] != current_cat:
+            cat_id = row_data.get("cat_id")
+            if cat_id != current_cat_id:
                 cat_groups.append([row_data])
-                current_cat = row_data["category"]
+                current_cat_id = cat_id
             else:
                 cat_groups[-1].append(row_data)
 
@@ -313,13 +349,27 @@ def write_recap_sheet(ws, recap_sections: list, title: str = ""):
             cat_start_row = current_row
 
             for row_data in cat_group:
-                # B: SIZE RANGE
-                ws.cell(row=current_row, column=2, value=row_data["size_range"]).font = NORMAL_FONT
-                ws.cell(row=current_row, column=2).alignment = CENTER_ALIGN
+                # Apply white fill and borders to all cells in this data row
+                for col in range(1, 8):
+                    c = ws.cell(row=current_row, column=col)
+                    c.fill = WHITE_FILL
+                    c.border = THIN_BORDER
 
-                # D: REF #
-                ws.cell(row=current_row, column=4,
-                        value=_safe_cell_text(row_data["ref_nums"])).font = NORMAL_FONT
+                # B: SIZE RANGE
+                cell_b = ws.cell(row=current_row, column=2, value=row_data["size_range"])
+                cell_b.font = NORMAL_FONT
+                cell_b.alignment = CENTER_ALIGN
+
+                # C: Category name (set on every row — merge later collapses to anchor)
+                ws.cell(row=current_row, column=3).font = NORMAL_FONT
+                ws.cell(row=current_row, column=3).alignment = WRAP_CENTER_ALIGN
+
+                # D: REF # — text format (@) with wrap_text
+                cell_d = ws.cell(row=current_row, column=4,
+                                 value=_safe_cell_text(row_data["ref_nums"]))
+                cell_d.font = NORMAL_FONT
+                cell_d.alignment = WRAP_CENTER_ALIGN
+                cell_d.number_format = TEXT_FMT
 
                 # E: OH
                 cell = ws.cell(row=current_row, column=5, value=row_data["oh"])
@@ -339,49 +389,46 @@ def write_recap_sheet(ws, recap_sections: list, title: str = ""):
                 cell.alignment = CENTER_ALIGN
                 cell.number_format = NUM_FMT
 
-                for col in range(1, 8):
-                    ws.cell(row=current_row, column=col).border = THIN_BORDER
-
                 all_data_rows.append(current_row)
                 current_row += 1
 
-            # Merge category name (column C)
-            if len(cat_group) > 1:
-                ws.merge_cells(f'C{cat_start_row}:C{current_row - 1}')
+            # Category name value (on anchor cell)
             ws.cell(row=cat_start_row, column=3,
-                    value=_safe_cell_text(cat_group[0]["category"])).font = NORMAL_FONT
-            ws.cell(row=cat_start_row, column=3).alignment = Alignment(
-                horizontal='center', vertical='center', wrap_text=True)
+                    value=_safe_cell_text(cat_group[0]["category"]))
 
-        # Merge brand name (column A)
+            # Queue category merge
+            if len(cat_group) > 1:
+                pending_merges.append(f'C{cat_start_row}:C{current_row - 1}')
+
+        # Brand name value (on anchor cell)
         if current_row > section_start_row:
-            if current_row - section_start_row > 1:
-                ws.merge_cells(f'A{section_start_row}:A{current_row - 1}')
             cell = ws.cell(row=section_start_row, column=1, value=_safe_cell_text(brand_label))
             cell.font = BOLD_FONT
-            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            cell.alignment = WRAP_CENTER_ALIGN
+            # Queue brand merge
+            if current_row - section_start_row > 1:
+                pending_merges.append(f'A{section_start_row}:A{current_row - 1}')
 
-        # Brand total row (light blue)
-        ws.merge_cells(f'A{current_row}:D{current_row}')
-        cell = ws.cell(row=current_row, column=1,
-                       value=_safe_cell_text(f"{brand_label} TOTAL:"))
-        cell.fill = LIGHT_BLUE_FILL
-        cell.font = BOLD_FONT
-        cell.alignment = CENTER_ALIGN
+        # Brand total row (light blue) — style ALL cells A:G before merging
+        for col in range(1, 8):
+            c = ws.cell(row=current_row, column=col)
+            c.fill = LIGHT_BLUE_FILL
+            c.border = THIN_BORDER
+
+        ws.cell(row=current_row, column=1,
+                value=_safe_cell_text(f"{brand_label} TOTAL:"))
+        ws.cell(row=current_row, column=1).font = BOLD_FONT
+        ws.cell(row=current_row, column=1).alignment = CENTER_ALIGN
 
         for col_idx, formula in [(5, f'=SUM(E{section_start_row}:E{current_row - 1})'),
                                   (6, f'=SUM(F{section_start_row}:F{current_row - 1})'),
                                   (7, f'=E{current_row}+F{current_row}')]:
             cell = ws.cell(row=current_row, column=col_idx, value=formula)
-            cell.fill = LIGHT_BLUE_FILL
             cell.font = BOLD_FONT
             cell.alignment = CENTER_ALIGN
             cell.number_format = NUM_FMT
 
-        for col in range(1, 8):
-            ws.cell(row=current_row, column=col).fill = LIGHT_BLUE_FILL
-            ws.cell(row=current_row, column=col).border = THIN_BORDER
-
+        pending_merges.append(f'A{current_row}:D{current_row}')
         brand_total_rows.append(current_row)
         current_row += 1
 
@@ -399,37 +446,40 @@ def write_recap_sheet(ws, recap_sections: list, title: str = ""):
     last_data = max(all_data_rows) if all_data_rows else 3
 
     for sr_name in unique_srs:
-        ws.merge_cells(f'A{current_row}:D{current_row}')
-        cell = ws.cell(row=current_row, column=1, value=_safe_cell_text(f"{sr_name} TOTAL"))
-        cell.fill = LIGHT_BLUE_FILL
-        cell.font = BOLD_FONT
-        cell.alignment = CENTER_ALIGN
+        # Style ALL cells A:G before merging
+        for col in range(1, 8):
+            c = ws.cell(row=current_row, column=col)
+            c.fill = LIGHT_BLUE_FILL
+            c.border = THIN_BORDER
 
-        # Sanitize for SUMIF criteria — keep hyphens (e.g. "BOYS 4-7"), remove formula chars
+        ws.cell(row=current_row, column=1, value=_safe_cell_text(f"{sr_name} TOTAL"))
+        ws.cell(row=current_row, column=1).font = BOLD_FONT
+        ws.cell(row=current_row, column=1).alignment = CENTER_ALIGN
+
         safe_sr = re.sub(r'["\';=+@]', '', sr_name)
 
         for col_idx, formula in [
-            (5, f'=SUMIF(B{first_data}:B{last_data},"{safe_sr}",E{first_data}:E{last_data})'),
-            (6, f'=SUMIF(B{first_data}:B{last_data},"{safe_sr}",F{first_data}:F{last_data})'),
+            (5, f'=SUMIF($B${first_data}:$B${last_data},"{safe_sr}",E${first_data}:E${last_data})'),
+            (6, f'=SUMIF($B${first_data}:$B${last_data},"{safe_sr}",F${first_data}:F${last_data})'),
             (7, f'=E{current_row}+F{current_row}'),
         ]:
             cell = ws.cell(row=current_row, column=col_idx, value=formula)
-            cell.fill = LIGHT_BLUE_FILL
             cell.font = BOLD_FONT
             cell.alignment = CENTER_ALIGN
             cell.number_format = NUM_FMT
 
-        for col in range(1, 8):
-            ws.cell(row=current_row, column=col).fill = LIGHT_BLUE_FILL
-            ws.cell(row=current_row, column=col).border = THIN_BORDER
+        pending_merges.append(f'A{current_row}:D{current_row}')
         current_row += 1
 
-    # Grand Total (yellow)
-    ws.merge_cells(f'A{current_row}:D{current_row}')
-    cell = ws.cell(row=current_row, column=1, value="GRAND TOTAL:")
-    cell.fill = YELLOW_FILL
-    cell.font = BOLD_FONT
-    cell.alignment = CENTER_ALIGN
+    # Grand Total (yellow) — style ALL cells before merging
+    for col in range(1, 8):
+        c = ws.cell(row=current_row, column=col)
+        c.fill = YELLOW_FILL
+        c.border = THIN_BORDER
+
+    ws.cell(row=current_row, column=1, value="GRAND TOTAL:")
+    ws.cell(row=current_row, column=1).font = BOLD_FONT
+    ws.cell(row=current_row, column=1).alignment = CENTER_ALIGN
 
     oh_formula = "+".join(f"E{r}" for r in brand_total_rows) if brand_total_rows else "0"
     wip_formula = "+".join(f"F{r}" for r in brand_total_rows) if brand_total_rows else "0"
@@ -437,14 +487,15 @@ def write_recap_sheet(ws, recap_sections: list, title: str = ""):
     for col_idx, formula in [(5, f'={oh_formula}'), (6, f'={wip_formula}'),
                               (7, f'=E{current_row}+F{current_row}')]:
         cell = ws.cell(row=current_row, column=col_idx, value=formula)
-        cell.fill = YELLOW_FILL
         cell.font = BOLD_FONT
         cell.alignment = CENTER_ALIGN
         cell.number_format = NUM_FMT
 
-    for col in range(1, 8):
-        ws.cell(row=current_row, column=col).fill = YELLOW_FILL
-        ws.cell(row=current_row, column=col).border = THIN_BORDER
+    pending_merges.append(f'A{current_row}:D{current_row}')
+
+    # NOW apply all merges — after all cell styling is complete
+    for merge_range in pending_merges:
+        ws.merge_cells(merge_range)
 
 
 # ─── Main Generator ─────────────────────────────────────────────────────────

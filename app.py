@@ -132,14 +132,21 @@ for sheet_idx, sheet in enumerate(sheets_with_data):
                                        key=f"brand_{sheet_idx}", max_chars=50)
             sheet_brand = sanitize_text(raw_brand, max_length=50).upper()
         with col2:
-            # Auto-detect general category from sheet name
-            gen_cat_default = sheet_name.upper().strip()
-            if sheet_brand and sheet_brand in gen_cat_default:
-                gen_cat_default = gen_cat_default.replace(sheet_brand, "").strip()
-            for prefix in ["BOYS 2-7 ", "GIRLS 2-6X ", "BOYS 4-7 ", "BOYS 8-20 "]:
-                gen_cat_default = gen_cat_default.replace(prefix, "").strip()
-            if not gen_cat_default:
+            # Auto-detect general category from sheet name.
+            # If brand is already a multi-word label from map_sheet_to_brand
+            # (e.g. "NIKE LONG BOTTOMS"), gen_cat should be empty to avoid
+            # duplication in the recap label (brand_label = brand + gen_cat).
+            if " " in sheet_brand:
+                # Multi-word brand already includes category info
+                gen_cat_default = ""
+            else:
                 gen_cat_default = sheet_name.upper().strip()
+                if sheet_brand and sheet_brand in gen_cat_default:
+                    gen_cat_default = gen_cat_default.replace(sheet_brand, "").strip()
+                for prefix in ["BOYS 2-7 ", "GIRLS 2-6X ", "BOYS 4-7 ", "BOYS 8-20 "]:
+                    gen_cat_default = gen_cat_default.replace(prefix, "").strip()
+                if not gen_cat_default:
+                    gen_cat_default = sheet_name.upper().strip()
             raw_gen_cat = st.text_input("General Category (e.g. LONG BOTTOMS, TEES)",
                                          value=gen_cat_default, key=f"gencat_{sheet_idx}", max_chars=100)
             gen_cat = sanitize_text(raw_gen_cat, max_length=100).upper()
