@@ -1,0 +1,45 @@
+# Secrets — NEVER commit
+.streamlit/secrets.toml
+.env
+.env.*
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test/temp files
+*.xlsx
+*.xls
+test_*
+temp/
+uploads/
+output/
+
+# Logs
+*.log
+logs/
+
+# Virtual environment
+venv/
+.venv/
+env/
