@@ -493,6 +493,24 @@ def write_recap_sheet(ws, recap_sections: list, title: str = ""):
 
     pending_merges.append(f'A{current_row}:D{current_row}')
 
+    # Auto-fit row heights for REF# column (D) — openpyxl doesn't auto-fit,
+    # so estimate based on content length vs column width.
+    col_d_width = 35.2  # character units
+    char_per_line = max(int(col_d_width * 0.85), 1)  # rough chars that fit per line
+    default_row_ht = 15  # default Excel row height in points
+    line_ht = 15  # points per line of text
+
+    for row_idx in all_data_rows:
+        cell_d = ws.cell(row=row_idx, column=4)
+        val = str(cell_d.value or '')
+        if not val:
+            continue
+        # Estimate lines needed
+        lines = max(1, -(-len(val) // char_per_line))  # ceiling division
+        needed_ht = lines * line_ht
+        if needed_ht > default_row_ht:
+            ws.row_dimensions[row_idx].height = needed_ht
+
     # NOW apply all merges — after all cell styling is complete
     for merge_range in pending_merges:
         ws.merge_cells(merge_range)
