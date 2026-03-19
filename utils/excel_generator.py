@@ -281,13 +281,33 @@ def _write_total_row(ws, row: int, total_oh: int, total_wip: int):
 
 
 def _add_product_image(ws, row: int, img_bytes: bytes):
+    """Add product image at the given row — resize to match original placement.
+
+    Original images span ~10 rows in column A (twoCellAnchor, ~200x200px).
+    openpyxl ignores width/height setters when serializing — it uses the
+    actual image pixel data. So we must resize the image bytes with PIL first.
+    """
     try:
-        img = XlImage(io.BytesIO(img_bytes))
-        img.width = 120
-        img.height = 120
+        from PIL import Image as PILImage
+        pil_img = PILImage.open(io.BytesIO(img_bytes))
+        w, h = pil_img.size
+        max_w, max_h = 200, 200
+        if w > max_w or h > max_h:
+            scale = min(max_w / w, max_h / h)
+            new_w, new_h = int(w * scale), int(h * scale)
+            pil_img = pil_img.resize((new_w, new_h), PILImage.LANCZOS)
+        buf = io.BytesIO()
+        pil_img.save(buf, format='PNG')
+        buf.seek(0)
+        img = XlImage(buf)
         ws.add_image(img, f'A{row}')
     except Exception:
-        pass
+        # Fallback: use original size if PIL unavailable
+        try:
+            img = XlImage(io.BytesIO(img_bytes))
+            ws.add_image(img, f'A{row}')
+        except Exception:
+            pass
 
 
 def write_detail_sheet(ws, categories: list, report_date: date = None):
