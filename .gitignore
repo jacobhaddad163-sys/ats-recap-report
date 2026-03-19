@@ -39,6 +39,10 @@ output/
 *.log
 logs/
 
+# Audit output
+audit-report.txt
+audit-report.md
+
 # Virtual environment
 venv/
 .venv/
