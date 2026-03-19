@@ -2,11 +2,13 @@
 ATS (Available to Ship) report parser.
 
 Parses raw ATS Excel files pasted from the internal system.
+Auto-detects column layout from the STYLE header row so it works
+with any ATS report format (Nike, Jordan, Hurley, etc.).
 
 Two format detection:
-  Format A: Sheets with TODDLER/4-7 summary headers in column K.
-    - Row with K="TODDLER" has summary OH/WIP/TOTAL in L/M/N
-    - Row below has category name in A, K="4-7", and summary OH/WIP/TOTAL
+  Format A: Sheets with TODDLER/4-7 summary headers (one column before OH).
+    - Row with "TODDLER" has summary OH/WIP/TOTAL
+    - Row below has category name in A, "4-7", and summary OH/WIP/TOTAL
   Format B: Sheets without TODDLER/4-7 summary headers.
     - Category names from non-empty cells in column A
     - OH/WIP computed by summing individual style rows grouped by size prefix
@@ -141,23 +143,96 @@ def _safe_str(v) -> str:
     return "" if s.startswith("#") else s
 
 
-def _is_skip_row(col_c_val: str) -> bool:
+def _detect_columns(ws) -> dict:
+    """Auto-detect column layout by finding the STYLE header row.
+
+    Scans for the first row containing a cell with value "STYLE" (case-insensitive).
+    From that row, maps: STYLE, COLOR, ON HAND, WIP, AVAILABILITY, MSRP columns.
+    Size columns = everything between COLOR and ON HAND.
+
+    Returns dict with keys:
+        style, color, oh, wip, avail, msrp, size_start, size_end, header_row,
+        summary_label_col (one column before OH, where TODDLER/4-7 labels go)
+    Falls back to Nike/Jordan defaults if no header row found.
+    """
+    # Default layout (Nike/Jordan): STYLE=3, COLOR=4, sizes=5-11, OH=12, WIP=13, AVAIL=14, MSRP=15
+    defaults = {
+        "style": 3, "color": 4, "oh": 12, "wip": 13, "avail": 14, "msrp": 15,
+        "size_start": 5, "size_end": 11, "header_row": 0,
+        "summary_label_col": 11,
+    }
+
+    for row_num in range(1, min(ws.max_row + 1, 200)):  # Don't scan forever
+        for col_num in range(1, min(ws.max_column + 1, 40)):
+            val = ws.cell(row=row_num, column=col_num).value
+            if val is not None and str(val).strip().upper() in ("STYLE", "STYLE #", "STYLE NUMBER"):
+                # Found the header row. Now map all columns from this row.
+                header_map = {}
+                for c in range(1, min(ws.max_column + 1, 40)):
+                    cv = ws.cell(row=row_num, column=c).value
+                    if cv is not None:
+                        header_map[str(cv).strip().upper()] = c
+
+                style_col = col_num
+                color_col = header_map.get("COLOR", header_map.get("COLOR NAME", style_col + 1))
+
+                # ON HAND can appear as "ON HAND" or "OH"
+                oh_col = header_map.get("ON HAND", header_map.get("OH", 0))
+                wip_col = header_map.get("WIP", 0)
+                avail_col = header_map.get("AVAILABILITY", header_map.get("AVAIL", 0))
+                msrp_col = header_map.get("MSRP", 0)
+
+                if not oh_col:
+                    # Couldn't find OH column, fall back to defaults
+                    logger.warning(f"Header row {row_num} found but no ON HAND/OH column. Using defaults.")
+                    return defaults
+
+                # Size columns: everything between COLOR and ON HAND
+                size_start = color_col + 1
+                size_end = oh_col - 1
+
+                # Summary label column: one before OH (where TODDLER/4-7 labels appear)
+                summary_label_col = oh_col - 1
+
+                result = {
+                    "style": style_col,
+                    "color": color_col,
+                    "oh": oh_col,
+                    "wip": wip_col if wip_col else oh_col + 1,
+                    "avail": avail_col if avail_col else (wip_col + 1 if wip_col else oh_col + 2),
+                    "msrp": msrp_col if msrp_col else (avail_col + 1 if avail_col else oh_col + 3),
+                    "size_start": size_start,
+                    "size_end": size_end,
+                    "header_row": row_num,
+                    "summary_label_col": summary_label_col,
+                }
+                logger.info(f"Detected columns from header row {row_num}: {result}")
+                return result
+
+    logger.warning("No STYLE header row found. Using default Nike/Jordan column layout.")
+    return defaults
+
+
+def _is_skip_row(style_val: str) -> bool:
     """Check if a row should be skipped for REF# extraction and style parsing.
 
-    Skip rows where col C is:
+    Skip rows where the STYLE column value is:
     - "STYLE" (or variants)
     - "TOTAL :" (or starts with TOTAL)
     - blank
     - color legend (contains " - " like "023 - BLACK")
+    Also skips common extra header labels like "YEAR", "SEASON".
     """
-    if not col_c_val:
+    if not style_val:
         return True
-    upper = col_c_val.upper().strip()
-    if upper in ("STYLE", "STYLE #", "STYLE NUMBER"):
+    upper = style_val.upper().strip()
+    if upper in ("STYLE", "STYLE #", "STYLE NUMBER", "YEAR", "SEASON",
+                  "SIZE SCALE", "COLOR", "COLOR NAME", "ON HAND", "OH",
+                  "WIP", "AVAILABILITY", "MSRP"):
         return True
     if upper.startswith("TOTAL"):
         return True
-    if " - " in col_c_val:
+    if " - " in style_val:
         return True
     return False
 
@@ -280,43 +355,52 @@ def _extract_images(file_bytes: bytes) -> Dict[str, Dict[int, bytes]]:
 
 # --- Format detection helpers ---------------------------------------------------
 
-def _detect_format_a(ws) -> bool:
-    """Detect Format A: scan column K (index 11) for cells containing exactly 'TODDLER'."""
+def _detect_format_a(ws, cols: dict) -> bool:
+    """Detect Format A: scan summary_label_col for cells containing exactly 'TODDLER'."""
+    label_col = cols["summary_label_col"]
     for row_num in range(1, ws.max_row + 1):
-        val = ws.cell(row=row_num, column=11).value
+        val = ws.cell(row=row_num, column=label_col).value
         if val is not None and str(val).strip().upper() == "TODDLER":
             return True
     return False
 
 
-def _extract_refs_between_rows(ws, start_row: int, end_row: int) -> Tuple[List[str], List[str]]:
-    """Extract unique REF#s from style codes in col C between start_row and end_row.
+def _extract_refs_between_rows(ws, start_row: int, end_row: int,
+                               cols: dict) -> Tuple[List[str], List[str]]:
+    """Extract unique REF#s from style codes between start_row and end_row.
 
+    Uses detected column layout (cols dict) for style, OH, WIP, and size columns.
     Returns (toddler_refs, boys47_refs) in order encountered.
     Skips STYLE, TOTAL, blank, and color legend rows.
     Also skips ratio rows (rows without OH value).
     """
+    style_col = cols["style"]
+    oh_col = cols["oh"]
+    wip_col = cols["wip"]
+    size_start = cols["size_start"]
+    size_end = cols["size_end"]
+
     toddler_refs = []
     boys47_refs = []
 
     for r in range(start_row, end_row + 1):
-        c_val = _safe_str(ws.cell(row=r, column=3).value)
+        c_val = _safe_str(ws.cell(row=r, column=style_col).value)
         if _is_skip_row(c_val):
             continue
         # Must have digits to be a style code
         if not any(ch.isdigit() for ch in c_val):
             continue
         # Skip ratio rows: rows without an OH value
-        oh_val = ws.cell(row=r, column=12).value
+        oh_val = ws.cell(row=r, column=oh_col).value
         if oh_val is None:
             continue
         oh = _safe_num(oh_val)
-        wip = _safe_num(ws.cell(row=r, column=13).value)
+        wip = _safe_num(ws.cell(row=r, column=wip_col).value)
         # Only count if it looks like a data row (has OH or WIP)
         if oh == 0 and wip == 0:
             # Check if any size cells have data (might still be a valid row with 0s)
             has_size_data = False
-            for ci in range(5, 12):
+            for ci in range(size_start, size_end + 1):
                 cv = ws.cell(row=r, column=ci).value
                 if cv is not None and str(cv).strip():
                     has_size_data = True
@@ -331,22 +415,30 @@ def _extract_refs_between_rows(ws, start_row: int, end_row: int) -> Tuple[List[s
                 toddler_refs.append(ref)
             elif sr == "BOYS 4-7" and ref not in boys47_refs:
                 boys47_refs.append(ref)
+            elif sr == "UNKNOWN" and ref not in boys47_refs:
+                # Unknown size prefix (non-Nike/Jordan) → put in boys47
+                boys47_refs.append(ref)
 
     return toddler_refs, boys47_refs
 
 
-def _parse_format_a(ws, ws_fmt, images_by_row: dict) -> List[dict]:
-    """Parse Format A sheet: has TODDLER/4-7 summary headers in column K.
+def _parse_format_a(ws, ws_fmt, images_by_row: dict, cols: dict) -> List[dict]:
+    """Parse Format A sheet: has TODDLER/4-7 summary headers.
 
-    Category detection: When 'TODDLER' found at row N in col K:
-      - Row N = TODDLER summary: col L=OH, col M=WIP, col N=Total
-      - Row N+1 = BOYS 4-7 summary: col A = CATEGORY NAME, col K='4-7', col L=OH, col M=WIP, col N=Total
+    Category detection: When 'TODDLER' found at row N in summary_label_col:
+      - Row N = TODDLER summary: OH/WIP/Total in detected columns
+      - Row N+1 = BOYS 4-7 summary: col A = CATEGORY NAME, label='4-7', OH/WIP/Total
     Only include categories with the standard TODDLER/4-7 header pattern.
     """
-    # Find all TODDLER rows in column K
+    label_col = cols["summary_label_col"]
+    oh_col = cols["oh"]
+    wip_col = cols["wip"]
+    avail_col = cols["avail"]
+
+    # Find all TODDLER rows in summary_label_col
     toddler_rows = []
     for row_num in range(1, ws.max_row + 1):
-        val = ws.cell(row=row_num, column=11).value
+        val = ws.cell(row=row_num, column=label_col).value
         if val is not None and str(val).strip().upper() == "TODDLER":
             toddler_rows.append(row_num)
 
@@ -358,21 +450,21 @@ def _parse_format_a(ws, ws_fmt, images_by_row: dict) -> List[dict]:
     for tod_row in toddler_rows:
         b47_row = tod_row + 1
         cat_name_raw = _safe_str(ws.cell(row=b47_row, column=1).value)
-        k_val = _safe_str(ws.cell(row=b47_row, column=11).value)
+        k_val = _safe_str(ws.cell(row=b47_row, column=label_col).value)
 
         if "4-7" not in k_val.upper():
-            logger.warning(f"Format A: Row {b47_row} col K='{k_val}', expected '4-7'. Skipping.")
+            logger.warning(f"Format A: Row {b47_row} col {label_col}='{k_val}', expected '4-7'. Skipping.")
             continue
 
-        tod_oh = _safe_num(ws.cell(row=tod_row, column=12).value)
-        tod_wip = _safe_num(ws.cell(row=tod_row, column=13).value)
-        tod_total = _safe_num(ws.cell(row=tod_row, column=14).value)
+        tod_oh = _safe_num(ws.cell(row=tod_row, column=oh_col).value)
+        tod_wip = _safe_num(ws.cell(row=tod_row, column=wip_col).value)
+        tod_total = _safe_num(ws.cell(row=tod_row, column=avail_col).value)
         if tod_total == 0 and (tod_oh > 0 or tod_wip > 0):
             tod_total = tod_oh + tod_wip
 
-        b47_oh = _safe_num(ws.cell(row=b47_row, column=12).value)
-        b47_wip = _safe_num(ws.cell(row=b47_row, column=13).value)
-        b47_total = _safe_num(ws.cell(row=b47_row, column=14).value)
+        b47_oh = _safe_num(ws.cell(row=b47_row, column=oh_col).value)
+        b47_wip = _safe_num(ws.cell(row=b47_row, column=wip_col).value)
+        b47_total = _safe_num(ws.cell(row=b47_row, column=avail_col).value)
         if b47_total == 0 and (b47_oh > 0 or b47_wip > 0):
             b47_total = b47_oh + b47_wip
 
@@ -395,10 +487,10 @@ def _parse_format_a(ws, ws_fmt, images_by_row: dict) -> List[dict]:
             data_end = ws.max_row
 
         # Extract REF#s from style rows in this range
-        toddler_refs, boys47_refs = _extract_refs_between_rows(ws, data_start, data_end)
+        toddler_refs, boys47_refs = _extract_refs_between_rows(ws, data_start, data_end, cols)
 
         # Parse blocks in this range
-        blocks = _parse_blocks_in_range(ws, data_start, data_end, images_by_row)
+        blocks = _parse_blocks_in_range(ws, data_start, data_end, images_by_row, cols)
 
         tod_oh, tod_wip, tod_total = cs["tod_oh"], cs["tod_wip"], cs["tod_total"]
         b47_oh, b47_wip, b47_total = cs["b47_oh"], cs["b47_wip"], cs["b47_total"]
@@ -421,7 +513,7 @@ def _parse_format_a(ws, ws_fmt, images_by_row: dict) -> List[dict]:
     return categories
 
 
-def _parse_format_b(ws, ws_fmt, images_by_row: dict) -> List[dict]:
+def _parse_format_b(ws, ws_fmt, images_by_row: dict, cols: dict) -> List[dict]:
     """Parse Format B sheet: no TODDLER/4-7 summary headers.
 
     Category detection: Scan column A for non-empty cells that are NOT
@@ -429,6 +521,10 @@ def _parse_format_b(ws, ws_fmt, images_by_row: dict) -> List[dict]:
 
     OH/WIP: SUM individual style detail rows grouped by size prefix.
     """
+    style_col = cols["style"]
+    oh_col = cols["oh"]
+    wip_col = cols["wip"]
+
     # Find category rows in column A
     category_rows = []  # [(row_num, category_name)]
     for row_num in range(1, ws.max_row + 1):
@@ -459,34 +555,39 @@ def _parse_format_b(ws, ws_fmt, images_by_row: dict) -> List[dict]:
         data_end = category_rows[cat_idx + 1][0] - 1 if cat_idx + 1 < len(category_rows) else ws.max_row
 
         # Extract REF#s
-        toddler_refs, boys47_refs = _extract_refs_between_rows(ws, data_start, data_end)
+        toddler_refs, boys47_refs = _extract_refs_between_rows(ws, data_start, data_end, cols)
 
         # Parse blocks
-        blocks = _parse_blocks_in_range(ws, data_start, data_end, images_by_row)
+        blocks = _parse_blocks_in_range(ws, data_start, data_end, images_by_row, cols)
 
         # Compute OH/WIP from individual style rows by size prefix
         tod_oh, tod_wip = 0, 0
         b47_oh, b47_wip = 0, 0
 
         for r in range(data_start, data_end + 1):
-            c_val = _safe_str(ws.cell(row=r, column=3).value)
+            c_val = _safe_str(ws.cell(row=r, column=style_col).value)
             if _is_skip_row(c_val):
                 continue
             if not any(ch.isdigit() for ch in c_val):
                 continue
             # Skip ratio rows (no OH value)
-            oh_raw = ws.cell(row=r, column=12).value
+            oh_raw = ws.cell(row=r, column=oh_col).value
             if oh_raw is None:
                 continue
 
             oh = _safe_num(oh_raw)
-            wip = _safe_num(ws.cell(row=r, column=13).value)
+            wip = _safe_num(ws.cell(row=r, column=wip_col).value)
 
             sr = size_range_from_style(c_val)
             if sr == "TODDLER":
                 tod_oh += oh
                 tod_wip += wip
             elif sr == "BOYS 4-7":
+                b47_oh += oh
+                b47_wip += wip
+            else:
+                # Unknown size prefix (non-Nike/Jordan brands like Hurley)
+                # Put into boys47 so it shows in the recap
                 b47_oh += oh
                 b47_wip += wip
 
@@ -537,26 +638,48 @@ def _merge_same_name_categories(categories: List[dict]) -> List[dict]:
     return list(merged.values())
 
 
-def _parse_blocks_in_range(ws, start_row: int, end_row: int, images_by_row: dict) -> list:
-    """Parse style blocks within a row range. Shared by both Format A and Format B."""
+def _parse_blocks_in_range(ws, start_row: int, end_row: int,
+                           images_by_row: dict, cols: dict) -> list:
+    """Parse style blocks within a row range. Shared by both Format A and Format B.
+
+    Uses detected column layout (cols dict) for all column positions.
+    """
+    style_col = cols["style"]
+    color_col = cols["color"]
+    oh_col = cols["oh"]
+    wip_col = cols["wip"]
+    avail_col = cols["avail"]
+    msrp_col = cols["msrp"]
+    size_start = cols["size_start"]
+    size_end = cols["size_end"]
+
     blocks = []
     row = start_row
 
-    while row <= end_row:
-        c_val = _safe_str(ws.cell(row=row, column=3).value)
+    def _is_total_row(r):
+        """Check if row r is a TOTAL row by checking the style col and col 3."""
+        for check_col in set([style_col, 3]):
+            v = _safe_str(ws.cell(row=r, column=check_col).value)
+            if v.upper().startswith("TOTAL"):
+                return True
+        return False
 
+    def _is_header_row(r):
+        """Check if row r is a STYLE header row."""
+        v = _safe_str(ws.cell(row=r, column=style_col).value)
+        return v.upper() in ("STYLE", "STYLE #", "STYLE NUMBER")
+
+    while row <= end_row:
         # Sub-header row (STYLE, COLOR, SIZE SCALE)
-        if c_val.upper() in ("STYLE", "STYLE #", "STYLE NUMBER"):
+        if _is_header_row(row):
             block_header_row = row
             row += 1
             block_rows = []
 
             while row <= end_row:
-                cv = _safe_str(ws.cell(row=row, column=3).value)
-
-                if cv.upper().startswith("TOTAL"):
-                    total_oh = _safe_num(ws.cell(row=row, column=12).value)
-                    total_wip = _safe_num(ws.cell(row=row, column=13).value)
+                if _is_total_row(row):
+                    total_oh = _safe_num(ws.cell(row=row, column=oh_col).value)
+                    total_wip = _safe_num(ws.cell(row=row, column=wip_col).value)
 
                     block_ref = block_rows[0]["ref_num"] if block_rows else ""
 
@@ -578,16 +701,18 @@ def _parse_blocks_in_range(ws, start_row: int, end_row: int, images_by_row: dict
                     row += 1
                     break
 
-                # Style data row
-                if cv and any(ch.isdigit() for ch in cv):
-                    color = _safe_str(ws.cell(row=row, column=4).value)
-                    oh = _safe_num(ws.cell(row=row, column=12).value)
-                    wip = _safe_num(ws.cell(row=row, column=13).value)
-                    avail = _safe_str(ws.cell(row=row, column=14).value)
-                    msrp = _safe_float(ws.cell(row=row, column=15).value)
+                # Style data row — check the style column for a style code
+                cv = _safe_str(ws.cell(row=row, column=style_col).value)
+
+                if cv and any(ch.isdigit() for ch in cv) and not _is_skip_row(cv):
+                    color = _safe_str(ws.cell(row=row, column=color_col).value)
+                    oh = _safe_num(ws.cell(row=row, column=oh_col).value)
+                    wip = _safe_num(ws.cell(row=row, column=wip_col).value)
+                    avail = _safe_str(ws.cell(row=row, column=avail_col).value)
+                    msrp = _safe_float(ws.cell(row=row, column=msrp_col).value)
 
                     is_label_row = oh > 0 or wip > 0
-                    for ci in range(5, 12):
+                    for ci in range(size_start, size_end + 1):
                         cval = ws.cell(row=row, column=ci).value
                         if cval and isinstance(cval, str) and 'T' in cval.upper():
                             is_label_row = True
@@ -597,7 +722,7 @@ def _parse_blocks_in_range(ws, start_row: int, end_row: int, images_by_row: dict
                     sr = size_range_from_style(cv)
 
                     cells = {}
-                    for ci in range(5, 12):
+                    for ci in range(size_start, size_end + 1):
                         cval = ws.cell(row=row, column=ci).value
                         if cval is not None:
                             cells[ci] = cval
@@ -710,15 +835,18 @@ def parse_ats_file(file_bytes: bytes) -> dict:
 
         images_by_row = all_images.get(sheet_name, {})
 
+        # Auto-detect column layout from the STYLE header row
+        cols = _detect_columns(ws)
+
         # Step 2: Detect format and parse accordingly
-        is_format_a = _detect_format_a(ws)
+        is_format_a = _detect_format_a(ws, cols)
 
         if is_format_a:
             logger.info(f"Sheet '{sheet_name}': Format A detected (TODDLER/4-7 headers)")
-            categories = _parse_format_a(ws, ws_fmt, images_by_row)
+            categories = _parse_format_a(ws, ws_fmt, images_by_row, cols)
         else:
             logger.info(f"Sheet '{sheet_name}': Format B detected (no summary headers)")
-            categories = _parse_format_b(ws, ws_fmt, images_by_row)
+            categories = _parse_format_b(ws, ws_fmt, images_by_row, cols)
 
         # Collect all ref nums
         all_ref_nums = []
@@ -734,6 +862,7 @@ def parse_ats_file(file_bytes: bytes) -> dict:
         result["sheets"].append({
             "name": sheet_name, "brand": brand,
             "categories": categories, "all_ref_nums": all_ref_nums,
+            "columns": cols,
         })
 
     return result

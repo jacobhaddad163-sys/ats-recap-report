@@ -62,12 +62,34 @@ TEXT_FMT = '@'
 
 # ─── Detail Sheet ────────────────────────────────────────────────────────────
 
-def _set_detail_col_widths(ws):
-    widths = {'A': 28, 'B': 6, 'C': 22, 'D': 28,
-              'E': 6, 'F': 6, 'G': 6, 'H': 6, 'I': 6, 'J': 6,
-              'K': 10, 'L': 12, 'M': 10, 'N': 14, 'O': 10}
-    for col_letter, width in widths.items():
-        ws.column_dimensions[col_letter].width = width
+def _default_columns() -> dict:
+    """Return the default (Nike/Jordan) column layout."""
+    return {
+        "style": 3, "color": 4, "oh": 12, "wip": 13, "avail": 14, "msrp": 15,
+        "size_start": 5, "size_end": 11, "header_row": 0,
+        "summary_label_col": 11,
+    }
+
+
+def _set_detail_col_widths(ws, cols: dict = None):
+    if cols is None:
+        cols = _default_columns()
+    # Always set A and B for image/spacer area
+    ws.column_dimensions['A'].width = 28
+    ws.column_dimensions['B'].width = 6
+    # Style and Color columns
+    ws.column_dimensions[get_column_letter(cols["style"])].width = 22
+    ws.column_dimensions[get_column_letter(cols["color"])].width = 28
+    # Size columns
+    for ci in range(cols["size_start"], cols["size_end"] + 1):
+        ws.column_dimensions[get_column_letter(ci)].width = 6
+    # Summary label column (one before OH)
+    ws.column_dimensions[get_column_letter(cols["summary_label_col"])].width = 10
+    # OH, WIP, AVAIL, MSRP
+    ws.column_dimensions[get_column_letter(cols["oh"])].width = 12
+    ws.column_dimensions[get_column_letter(cols["wip"])].width = 10
+    ws.column_dimensions[get_column_letter(cols["avail"])].width = 14
+    ws.column_dimensions[get_column_letter(cols["msrp"])].width = 10
 
 
 def _write_sheet_header(ws, report_date: date = None):
@@ -87,10 +109,18 @@ def _write_sheet_header(ws, report_date: date = None):
 
 
 def _write_category_summary(ws, row: int, label: str, oh: int, wip: int,
-                             is_category_row: bool = False, category_name: str = ""):
+                             is_category_row: bool = False, category_name: str = "",
+                             cols: dict = None):
     """Write a summary row (TODDLER or 4-7 line)."""
-    # Column K: size range label
-    cell = ws.cell(row=row, column=11, value=label)
+    if cols is None:
+        cols = _default_columns()
+    label_col = cols["summary_label_col"]
+    oh_col = cols["oh"]
+    wip_col = cols["wip"]
+    avail_col = cols["avail"]
+
+    # Size range label column
+    cell = ws.cell(row=row, column=label_col, value=label)
     cell.font = BOLD_FONT
     cell.alignment = CENTER_ALIGN
     cell.border = THIN_BORDER
@@ -98,22 +128,22 @@ def _write_category_summary(ws, row: int, label: str, oh: int, wip: int,
     if label == "4-7":
         cell.number_format = TEXT_FMT
 
-    # Column L: OH — not bold, accounting format shows dash for zero
-    cell = ws.cell(row=row, column=12, value=oh)
+    # OH — not bold, accounting format shows dash for zero
+    cell = ws.cell(row=row, column=oh_col, value=oh)
     cell.font = NORMAL_FONT
     cell.alignment = CENTER_ALIGN
     cell.number_format = ACCT_NUM_FMT
     cell.border = THIN_BORDER
 
-    # Column M: WIP — not bold, accounting format shows dash for zero
-    cell = ws.cell(row=row, column=13, value=wip)
+    # WIP — not bold, accounting format shows dash for zero
+    cell = ws.cell(row=row, column=wip_col, value=wip)
     cell.font = NORMAL_FONT
     cell.alignment = CENTER_ALIGN
     cell.number_format = ACCT_NUM_FMT
     cell.border = THIN_BORDER
 
-    # Column N: Total — not bold
-    cell = ws.cell(row=row, column=14, value=oh + wip)
+    # Total — not bold
+    cell = ws.cell(row=row, column=avail_col, value=oh + wip)
     cell.font = NORMAL_FONT
     cell.alignment = CENTER_ALIGN
     cell.number_format = ACCT_NUM_FMT
@@ -129,12 +159,25 @@ def _write_category_summary(ws, row: int, label: str, oh: int, wip: int,
     # Note: original raw file has NO borders on C:J of the 4-7 summary row
 
 
-def _write_block_header(ws, row: int):
+def _write_block_header(ws, row: int, cols: dict = None):
     """Write grey STYLE header row — matching original raw format exactly."""
-    headers = {3: "STYLE", 4: "COLOR", 5: "SIZE SCALE",
-               12: "ON HAND", 13: "WIP", 14: "AVAILABILITY", 15: "MSRP"}
-    # Grey fill only on cols 3-15 (not 1-2 which are image area)
-    for col in range(3, 16):
+    if cols is None:
+        cols = _default_columns()
+    style_col = cols["style"]
+    color_col = cols["color"]
+    size_start = cols["size_start"]
+    size_end = cols["size_end"]
+    oh_col = cols["oh"]
+    wip_col = cols["wip"]
+    avail_col = cols["avail"]
+    msrp_col = cols["msrp"]
+
+    headers = {
+        style_col: "STYLE", color_col: "COLOR", size_start: "SIZE SCALE",
+        oh_col: "ON HAND", wip_col: "WIP", avail_col: "AVAILABILITY", msrp_col: "MSRP",
+    }
+    # Grey fill on cols from style to msrp (not 1-2 which are image area)
+    for col in range(style_col, msrp_col + 1):
         c = ws.cell(row=row, column=col)
         c.fill = GREY_FILL
         c.font = NORMAL_FONT
@@ -142,22 +185,22 @@ def _write_block_header(ws, row: int):
     # Set header labels
     for col, label in headers.items():
         ws.cell(row=row, column=col, value=label)
-    # Borders matching original exactly
-    for col in [3, 4, 5, 15]:
+    # Borders matching original pattern
+    for col in [style_col, color_col, size_start, msrp_col]:
         ws.cell(row=row, column=col).border = THIN_BORDER
-    for col in range(6, 11):
+    for col in range(size_start + 1, size_end):
         ws.cell(row=row, column=col).border = Border(
             top=Side(style='thin'), bottom=Side(style='thin'))
-    # Col K (11): right+top+bottom (forms boundary before ON HAND)
-    ws.cell(row=row, column=11).border = Border(
+    # Last size col: right+top+bottom (forms boundary before ON HAND)
+    ws.cell(row=row, column=size_end).border = Border(
         right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-    for col in [12, 13, 14]:
+    for col in [oh_col, wip_col, avail_col]:
         ws.cell(row=row, column=col).border = Border(
             left=Side(style='thin'), right=Side(style='thin'),
             top=Side(style='thin'), bottom=Side(style='thin'))
 
 
-def _write_data_rows(ws, start_row: int, rows_data: list) -> int:
+def _write_data_rows(ws, start_row: int, rows_data: list, cols: dict = None) -> int:
     """Write style data rows — matching original raw format exactly.
 
     Original border pattern:
@@ -165,24 +208,25 @@ def _write_data_rows(ws, start_row: int, rows_data: list) -> int:
       Ratio rows (no OH):  thin on left, right, bottom — NO top
     Number format: General (matching raw file, no forced #,##0)
     """
-    # Border templates matching original
-    label_border_outer = Border(
-        left=Side(style='thin'), right=Side(style='thin'),
-        top=Side(style='thin'))
-    label_border_inner = Border(top=Side(style='thin'))
-    ratio_border_outer = Border(
-        left=Side(style='thin'), right=Side(style='thin'),
-        bottom=Side(style='thin'))
-    ratio_border_inner = Border(bottom=Side(style='thin'))
+    if cols is None:
+        cols = _default_columns()
+    style_col = cols["style"]
+    color_col = cols["color"]
+    size_start = cols["size_start"]
+    size_end = cols["size_end"]
+    oh_col = cols["oh"]
+    wip_col = cols["wip"]
+    avail_col = cols["avail"]
+    msrp_col = cols["msrp"]
 
     current_row = start_row
     for row_data in rows_data:
         is_label = row_data.get("is_label_row", True)
 
-        ws.cell(row=current_row, column=3, value=row_data["style_num"]).font = NORMAL_FONT
-        ws.cell(row=current_row, column=4, value=row_data["color"]).font = NORMAL_FONT
+        ws.cell(row=current_row, column=style_col, value=row_data["style_num"]).font = NORMAL_FONT
+        ws.cell(row=current_row, column=color_col, value=row_data["color"]).font = NORMAL_FONT
 
-        for col_idx in range(5, 12):
+        for col_idx in range(size_start, size_end + 1):
             val = row_data["cells"].get(col_idx)
             if val is not None:
                 cell = ws.cell(row=current_row, column=col_idx, value=val)
@@ -190,102 +234,109 @@ def _write_data_rows(ws, start_row: int, rows_data: list) -> int:
                 cell.alignment = CENTER_ALIGN
 
         if is_label and row_data["oh"] > 0:
-            cell = ws.cell(row=current_row, column=12, value=row_data["oh"])
+            cell = ws.cell(row=current_row, column=oh_col, value=row_data["oh"])
             cell.font = NORMAL_FONT
             cell.alignment = CENTER_ALIGN
-            # General format — no forced #,##0
 
         if is_label and row_data["wip"] > 0:
-            cell = ws.cell(row=current_row, column=13, value=row_data["wip"])
+            cell = ws.cell(row=current_row, column=wip_col, value=row_data["wip"])
             cell.font = NORMAL_FONT
             cell.alignment = CENTER_ALIGN
 
         avail = row_data.get("availability", "")
         if avail:
-            ws.cell(row=current_row, column=14, value=avail).font = NORMAL_FONT
+            ws.cell(row=current_row, column=avail_col, value=avail).font = NORMAL_FONT
 
         msrp = row_data.get("msrp", 0)
         if msrp > 0:
-            cell = ws.cell(row=current_row, column=15, value=msrp)
+            cell = ws.cell(row=current_row, column=msrp_col, value=msrp)
             cell.font = NORMAL_FONT
             cell.alignment = CENTER_ALIGN
             cell.number_format = PRICE_FMT
 
-        # Borders — match original raw file exactly per column
+        # Borders — match original raw file pattern per column
         if is_label:
-            # Label rows — match original border pattern exactly
-            for col in [3, 4]:
+            for col in [style_col, color_col]:
                 ws.cell(row=current_row, column=col).border = Border(
                     left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'))
-            ws.cell(row=current_row, column=5).border = Border(
+            ws.cell(row=current_row, column=size_start).border = Border(
                 left=Side(style='thin'), top=Side(style='thin'))
-            for col in range(6, 11):
+            for col in range(size_start + 1, size_end):
                 ws.cell(row=current_row, column=col).border = Border(top=Side(style='thin'))
-            # Col K (11): right border only (boundary before ON HAND)
-            ws.cell(row=current_row, column=11).border = Border(
+            # Last size col: right border only (boundary before ON HAND)
+            ws.cell(row=current_row, column=size_end).border = Border(
                 right=Side(style='thin'))
-            for col in [12, 13, 14, 15]:
+            for col in [oh_col, wip_col, avail_col, msrp_col]:
                 ws.cell(row=current_row, column=col).border = Border(
                     left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'))
         else:
-            # Ratio rows — match original border pattern exactly
-            for col in [3, 4]:
+            for col in [style_col, color_col]:
                 ws.cell(row=current_row, column=col).border = Border(
                     left=Side(style='thin'), right=Side(style='thin'), bottom=Side(style='thin'))
-            ws.cell(row=current_row, column=5).border = Border(
+            ws.cell(row=current_row, column=size_start).border = Border(
                 left=Side(style='thin'), bottom=Side(style='thin'))
-            for col in range(6, 11):
+            for col in range(size_start + 1, size_end):
                 ws.cell(row=current_row, column=col).border = Border(bottom=Side(style='thin'))
-            # Col K (11): right+bottom border
-            ws.cell(row=current_row, column=11).border = Border(
+            # Last size col: right+bottom border
+            ws.cell(row=current_row, column=size_end).border = Border(
                 right=Side(style='thin'), bottom=Side(style='thin'))
-            ws.cell(row=current_row, column=12).border = Border(
+            ws.cell(row=current_row, column=oh_col).border = Border(
                 left=Side(style='thin'), right=Side(style='thin'))
-            for col in [13, 14]:
+            for col in [wip_col, avail_col]:
                 ws.cell(row=current_row, column=col).border = Border(
                     left=Side(style='thin'), right=Side(style='thin'), bottom=Side(style='thin'))
-            ws.cell(row=current_row, column=15).border = Border(
+            ws.cell(row=current_row, column=msrp_col).border = Border(
                 left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'))
 
         current_row += 1
     return current_row
 
 
-def _write_total_row(ws, row: int, total_oh: int, total_wip: int):
+def _write_total_row(ws, row: int, total_oh: int, total_wip: int, cols: dict = None):
     """Write TOTAL row — matching original raw format exactly.
 
-    Original: grey fill cols 3-15 only, TOTAL text bold, values NOT bold,
+    Original: grey fill on style-to-msrp cols only, TOTAL text bold, values NOT bold,
     General number format, specific border pattern.
     """
-    # Grey fill only on cols 3-15 (not 1-2 image area)
-    for col in range(3, 16):
+    if cols is None:
+        cols = _default_columns()
+    style_col = cols["style"]
+    color_col = cols["color"]
+    size_start = cols["size_start"]
+    size_end = cols["size_end"]
+    oh_col = cols["oh"]
+    wip_col = cols["wip"]
+    avail_col = cols["avail"]
+    msrp_col = cols["msrp"]
+
+    # Grey fill on cols style-to-msrp (not 1-2 image area)
+    for col in range(style_col, msrp_col + 1):
         c = ws.cell(row=row, column=col)
         c.fill = GREY_FILL
         c.font = NORMAL_FONT
 
     # TOTAL text — bold
-    cell = ws.cell(row=row, column=3, value="TOTAL :")
+    cell = ws.cell(row=row, column=style_col, value="TOTAL :")
     cell.font = BOLD_FONT
 
     # OH — not bold, General format
-    cell = ws.cell(row=row, column=12, value=total_oh)
+    cell = ws.cell(row=row, column=oh_col, value=total_oh)
     cell.alignment = CENTER_ALIGN
 
     # WIP
     if total_wip > 0:
-        cell = ws.cell(row=row, column=13, value=total_wip)
+        cell = ws.cell(row=row, column=wip_col, value=total_wip)
         cell.alignment = CENTER_ALIGN
 
-    # Borders matching original: C,D = thin all 4; E = thin left+top+bottom;
-    # F-K = thin top+bottom; L-N = thin left+right+top+bottom; O = thin all 4
-    for col in [3, 4, 15]:
+    # Borders matching original pattern
+    for col in [style_col, color_col, msrp_col]:
         ws.cell(row=row, column=col).border = THIN_BORDER
-    ws.cell(row=row, column=5).border = Border(
+    ws.cell(row=row, column=size_start).border = Border(
         left=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-    for col in range(6, 12):
+    for col in range(size_start + 1, size_end + 1):
         ws.cell(row=row, column=col).border = Border(
             top=Side(style='thin'), bottom=Side(style='thin'))
-    for col in [12, 13, 14]:
+    for col in [oh_col, wip_col, avail_col]:
         ws.cell(row=row, column=col).border = Border(
             left=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
@@ -320,12 +371,21 @@ def _add_product_image(ws, row: int, img_bytes: bytes):
             pass
 
 
-def write_detail_sheet(ws, categories: list, report_date: date = None):
+def write_detail_sheet(ws, categories: list, report_date: date = None,
+                       cols: dict = None):
     """
     Write a complete detail sheet.
     categories: list of category dicts from parser (with toddler_oh, boys47_oh, blocks, etc.)
+    cols: detected column layout dict from parser (or None for defaults)
     """
-    _set_detail_col_widths(ws)
+    if cols is None:
+        cols = _default_columns()
+    oh_col = cols["oh"]
+    wip_col = cols["wip"]
+    avail_col = cols["avail"]
+    label_col = cols["summary_label_col"]
+
+    _set_detail_col_widths(ws, cols)
     _write_sheet_header(ws, report_date)
     current_row = 10
 
@@ -339,37 +399,36 @@ def write_detail_sheet(ws, categories: list, report_date: date = None):
             continue
 
         # OH/WIP/TOTAL column sub-headers (yellow) — aligned above data columns
-        for col, label in [(12, "OH"), (13, "WIP"), (14, "TOTAL")]:
+        for col, label in [(oh_col, "OH"), (wip_col, "WIP"), (avail_col, "TOTAL")]:
             cell = ws.cell(row=current_row, column=col, value=label)
             cell.fill = YELLOW_FILL
             cell.font = BOLD_FONT
             cell.alignment = CENTER_ALIGN
             cell.border = THIN_BORDER
-        # Col K (11) also gets yellow fill and border (no label)
-        ws.cell(row=current_row, column=11).fill = YELLOW_FILL
-        ws.cell(row=current_row, column=11).border = THIN_BORDER
+        # Summary label col also gets yellow fill and border (no label)
+        ws.cell(row=current_row, column=label_col).fill = YELLOW_FILL
+        ws.cell(row=current_row, column=label_col).border = THIN_BORDER
         current_row += 1
 
         # TODDLER summary row — always show, even if zeros
-        _write_category_summary(ws, current_row, "TODDLER", tod_oh, tod_wip)
+        _write_category_summary(ws, current_row, "TODDLER", tod_oh, tod_wip, cols=cols)
         current_row += 1
 
         # 4-7 summary row — always show, category name goes here
         _write_category_summary(ws, current_row, "4-7", b47_oh, b47_wip,
-                                 is_category_row=True, category_name=cat_name)
+                                 is_category_row=True, category_name=cat_name, cols=cols)
         current_row += 1
 
         # Write all style blocks for this category
         for block in blocks:
             block_header_row = current_row
-            _write_block_header(ws, current_row)
+            _write_block_header(ws, current_row, cols=cols)
             # Place image at the STYLE header row in col A — matching original
-            # (original uses twoCellAnchor starting at the STYLE row, spanning ~10 rows)
             if block.get("product_image"):
                 _add_product_image(ws, block_header_row, block["product_image"])
             current_row += 1
-            current_row = _write_data_rows(ws, current_row, block["rows"])
-            _write_total_row(ws, current_row, block["total_oh"], block["total_wip"])
+            current_row = _write_data_rows(ws, current_row, block["rows"], cols=cols)
+            _write_total_row(ws, current_row, block["total_oh"], block["total_wip"], cols=cols)
             current_row += 1
             current_row += 8  # spacing after TOTAL (image area)
 
@@ -633,7 +692,9 @@ def generate_ats_report(categories_by_sheet: Dict[str, dict],
 
     for sheet_name, sheet_info in categories_by_sheet.items():
         ws = wb.create_sheet(title=sheet_name[:31])
-        write_detail_sheet(ws, sheet_info["categories"], report_date=report_date)
+        sheet_cols = sheet_info.get("columns")
+        write_detail_sheet(ws, sheet_info["categories"], report_date=report_date,
+                           cols=sheet_cols)
         # Add Haddad Brands logo at A1 (same position as original)
         if logo_image:
             try:

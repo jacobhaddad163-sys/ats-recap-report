@@ -173,6 +173,7 @@ for sheet_idx, sheet in enumerate(sheets_with_data):
             "brand": sheet_brand,
             "general_category": gen_cat,
             "categories": categories,
+            "columns": sheet.get("columns"),
         }
 
 # ─── Step 3: Filter Settings ─────────────────────────────────────────────────
@@ -223,6 +224,7 @@ if st.button("Generate ATS Recap Report", type="primary", key="generate_btn"):
                         "brand": config["brand"],
                         "general_category": config["general_category"],
                         "categories": filtered_cats,
+                        "columns": config.get("columns"),
                     }
 
                 logo = parsed.get("logo_image")
