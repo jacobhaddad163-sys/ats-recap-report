@@ -411,21 +411,9 @@ def write_detail_sheet(ws, categories: list, report_date: date = None,
 
         # Write one summary row per size range; category name goes on the LAST row
         sr_items = list(size_ranges.items())
-        # Map size range names to short labels for the detail sheet
-        # "TODDLER BOY"/"TODDLER GIRL" -> "TODDLER", "4-7 BOY" -> "4-7", etc.
-        def _short_label(sr_name):
-            """Convert full size range name to short label for detail sheet."""
-            label_map = {
-                "NB GIRL": "NB", "INFANT GIRL": "INFANT", "TODDLER GIRL": "TODDLER",
-                "4-6X GIRL": "4-6X", "7-16 GIRL": "7-16",
-                "NB BOY": "NB", "INFANT BOY": "INFANT", "TODDLER BOY": "TODDLER",
-                "4-7 BOY": "4-7", "8-20 BOY": "8-20",
-            }
-            return label_map.get(sr_name, sr_name)
-
         for idx, (sr_name, sr_data) in enumerate(sr_items):
             is_last = (idx == len(sr_items) - 1)
-            label = _short_label(sr_name)
+            label = sr_name  # Full name: "TODDLER BOY", "4-7 BOY", "INFANT GIRL", etc.
             _write_category_summary(
                 ws, current_row, label, sr_data["oh"], sr_data["wip"],
                 is_category_row=is_last, category_name=cat_name if is_last else "",
