@@ -147,8 +147,8 @@ for sheet_idx, sheet in enumerate(sheets_with_data):
                     gen_cat_default = gen_cat_default.replace(sheet_brand, "").strip()
                 for prefix in ["BOYS 2-7 ", "GIRLS 2-6X ", "BOYS 4-7 ", "BOYS 8-20 "]:
                     gen_cat_default = gen_cat_default.replace(prefix, "").strip()
-                if not gen_cat_default:
-                    gen_cat_default = sheet_name.upper().strip()
+                # If nothing left after stripping brand, leave empty (brand alone is fine)
+                # Don't fall back to sheet name — that causes "HURLEY HURLEY"
             raw_gen_cat = st.text_input("General Category (e.g. LONG BOTTOMS, TEES)",
                                          value=gen_cat_default, key=f"gencat_{sheet_idx}", max_chars=100)
             gen_cat = sanitize_text(raw_gen_cat, max_length=100).upper()
