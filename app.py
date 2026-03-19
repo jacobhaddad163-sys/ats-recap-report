@@ -158,13 +158,15 @@ for sheet_idx, sheet in enumerate(sheets_with_data):
         for cat in categories:
             n_blocks = len(cat["blocks"])
             sr_info = []
-            if cat["toddler_oh"] > 0 or cat["toddler_wip"] > 0:
-                sr_info.append(f"TODDLER: OH={cat['toddler_oh']:,}")
-            if cat["boys47_oh"] > 0 or cat["boys47_wip"] > 0:
-                sr_info.append(f"BOYS 4-7: OH={cat['boys47_oh']:,}")
+            all_refs = []
+            for sr_name, sr_data in cat.get("size_ranges", {}).items():
+                if sr_data["oh"] > 0 or sr_data["wip"] > 0:
+                    sr_info.append(f"{sr_name}: OH={sr_data['oh']:,}")
+                for ref in sr_data["refs"]:
+                    if ref not in all_refs:
+                        all_refs.append(ref)
             sr_str = " | ".join(sr_info) if sr_info else "no data"
-            all_refs = sorted(set(cat["toddler_refs"] + cat["boys47_refs"]))
-            refs_str = ", ".join(all_refs)
+            refs_str = ", ".join(sorted(all_refs))
             st.markdown(f"- **{cat['name']}** ({n_blocks} blocks, refs: {refs_str}) — {sr_str}")
 
         st.success(f"Auto-detected {len(cat_names)} categories with {total_refs} ref#s")

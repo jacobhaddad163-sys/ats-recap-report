@@ -124,8 +124,8 @@ def _write_category_summary(ws, row: int, label: str, oh: int, wip: int,
     cell.font = BOLD_FONT
     cell.alignment = CENTER_ALIGN
     cell.border = THIN_BORDER
-    # "4-7" needs text format to prevent Excel date interpretation
-    if label == "4-7":
+    # Labels like "4-7", "4-6X", "7-16", "8-20" need text format to prevent Excel date interpretation
+    if any(ch.isdigit() for ch in label):
         cell.number_format = TEXT_FMT
 
     # OH — not bold, accounting format shows dash for zero
@@ -391,8 +391,7 @@ def write_detail_sheet(ws, categories: list, report_date: date = None,
 
     for cat in categories:
         cat_name = cat["name"]
-        tod_oh, tod_wip = cat["toddler_oh"], cat["toddler_wip"]
-        b47_oh, b47_wip = cat["boys47_oh"], cat["boys47_wip"]
+        size_ranges = cat.get("size_ranges", OrderedDict())
         blocks = cat["blocks"]
 
         if not blocks:
@@ -410,14 +409,29 @@ def write_detail_sheet(ws, categories: list, report_date: date = None,
         ws.cell(row=current_row, column=label_col).border = THIN_BORDER
         current_row += 1
 
-        # TODDLER summary row — always show, even if zeros
-        _write_category_summary(ws, current_row, "TODDLER", tod_oh, tod_wip, cols=cols)
-        current_row += 1
+        # Write one summary row per size range; category name goes on the LAST row
+        sr_items = list(size_ranges.items())
+        # Map size range names to short labels for the detail sheet
+        # "TODDLER BOY"/"TODDLER GIRL" -> "TODDLER", "4-7 BOY" -> "4-7", etc.
+        def _short_label(sr_name):
+            """Convert full size range name to short label for detail sheet."""
+            label_map = {
+                "NB GIRL": "NB", "INFANT GIRL": "INFANT", "TODDLER GIRL": "TODDLER",
+                "4-6X GIRL": "4-6X", "7-16 GIRL": "7-16",
+                "NB BOY": "NB", "INFANT BOY": "INFANT", "TODDLER BOY": "TODDLER",
+                "4-7 BOY": "4-7", "8-20 BOY": "8-20",
+            }
+            return label_map.get(sr_name, sr_name)
 
-        # 4-7 summary row — always show, category name goes here
-        _write_category_summary(ws, current_row, "4-7", b47_oh, b47_wip,
-                                 is_category_row=True, category_name=cat_name, cols=cols)
-        current_row += 1
+        for idx, (sr_name, sr_data) in enumerate(sr_items):
+            is_last = (idx == len(sr_items) - 1)
+            label = _short_label(sr_name)
+            _write_category_summary(
+                ws, current_row, label, sr_data["oh"], sr_data["wip"],
+                is_category_row=is_last, category_name=cat_name if is_last else "",
+                cols=cols,
+            )
+            current_row += 1
 
         # Write all style blocks for this category
         for block in blocks:
@@ -588,7 +602,10 @@ def write_recap_sheet(ws, recap_sections: list, title: str = ""):
             if row_data["size_range"] not in unique_srs:
                 unique_srs.append(row_data["size_range"])
 
-    sr_sort_order = ["TODDLER", "BOYS 4-7", "NEWBORN", "INFANT", "4-6X", "7-16", "8-20"]
+    sr_sort_order = [
+        "NB GIRL", "INFANT GIRL", "TODDLER GIRL", "4-6X GIRL", "7-16 GIRL",
+        "NB BOY", "INFANT BOY", "TODDLER BOY", "4-7 BOY", "8-20 BOY",
+    ]
     unique_srs.sort(key=lambda x: sr_sort_order.index(x) if x in sr_sort_order else 99)
 
     first_data = min(all_data_rows) if all_data_rows else 3

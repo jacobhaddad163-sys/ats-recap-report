@@ -17,9 +17,9 @@ REF# extraction from style codes:
   - Strip first 2 characters (size prefix): 76F610-C5E-P3 -> F610-C5E-P3
   - Take everything before the first dash: F610-C5E-P3 -> F610
 
-Size range from first digit of style code:
-  - 7x = Toddler (76=Nike, 75=Jordan)
-  - 8x = Boys 4-7 (86=Nike, 85=Jordan)
+Size range from first digit of style code (all 10 ranges):
+  0=NB GIRL, 1=INFANT GIRL, 2=TODDLER GIRL, 3=4-6X GIRL, 4=7-16 GIRL
+  5=NB BOY, 6=INFANT BOY, 7=TODDLER BOY, 8=4-7 BOY, 9=8-20 BOY
 """
 
 import io
@@ -28,7 +28,7 @@ import re
 import xml.etree.ElementTree as _ET
 import zipfile
 from collections import defaultdict, OrderedDict
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import openpyxl
 try:
@@ -97,20 +97,30 @@ def ref_from_style(style_raw: str) -> str:
     return ref
 
 
+SIZE_RANGE_MAP = {
+    '0': "NB GIRL",
+    '1': "INFANT GIRL",
+    '2': "TODDLER GIRL",
+    '3': "4-6X GIRL",
+    '4': "7-16 GIRL",
+    '5': "NB BOY",
+    '6': "INFANT BOY",
+    '7': "TODDLER BOY",
+    '8': "4-7 BOY",
+    '9': "8-20 BOY",
+}
+
+
 def size_range_from_style(style_num: str) -> str:
     """
-    First digit: 7=Toddler, 8=Boys 4-7.
-    Works for both Nike (76/86) and Jordan (75/85).
+    First digit of style number = size range code:
+      0=NB Girl, 1=Inf Girl, 2=Tod Girl, 3=4-6X Girl, 4=7-16 Girl
+      5=NB Boy, 6=Inf Boy, 7=Toddler Boy, 8=4-7 Boy, 9=8-20 Boy
     """
     if not style_num:
         return "UNKNOWN"
     first = style_num[0]
-    if first == '7':
-        return "TODDLER"
-    elif first == '8':
-        return "BOYS 4-7"
-    else:
-        return "UNKNOWN"
+    return SIZE_RANGE_MAP.get(first, "UNKNOWN")
 
 
 def _safe_num(v, default=0) -> int:
@@ -366,11 +376,11 @@ def _detect_format_a(ws, cols: dict) -> bool:
 
 
 def _extract_refs_between_rows(ws, start_row: int, end_row: int,
-                               cols: dict) -> Tuple[List[str], List[str]]:
+                               cols: dict) -> Dict[str, List[str]]:
     """Extract unique REF#s from style codes between start_row and end_row.
 
     Uses detected column layout (cols dict) for style, OH, WIP, and size columns.
-    Returns (toddler_refs, boys47_refs) in order encountered.
+    Returns dict {size_range_name: [refs]} in order encountered.
     Skips STYLE, TOTAL, blank, and color legend rows.
     Also skips ratio rows (rows without OH value).
     """
@@ -380,8 +390,7 @@ def _extract_refs_between_rows(ws, start_row: int, end_row: int,
     size_start = cols["size_start"]
     size_end = cols["size_end"]
 
-    toddler_refs = []
-    boys47_refs = []
+    refs_by_sr = {}  # {size_range: [refs]}
 
     for r in range(start_row, end_row + 1):
         c_val = _safe_str(ws.cell(row=r, column=style_col).value)
@@ -410,16 +419,13 @@ def _extract_refs_between_rows(ws, start_row: int, end_row: int,
 
         ref = ref_from_style(c_val)
         sr = size_range_from_style(c_val)
-        if ref:
-            if sr == "TODDLER" and ref not in toddler_refs:
-                toddler_refs.append(ref)
-            elif sr == "BOYS 4-7" and ref not in boys47_refs:
-                boys47_refs.append(ref)
-            elif sr == "UNKNOWN" and ref not in boys47_refs:
-                # Unknown size prefix (non-Nike/Jordan) → put in boys47
-                boys47_refs.append(ref)
+        if ref and sr != "UNKNOWN":
+            if sr not in refs_by_sr:
+                refs_by_sr[sr] = []
+            if ref not in refs_by_sr[sr]:
+                refs_by_sr[sr].append(ref)
 
-    return toddler_refs, boys47_refs
+    return refs_by_sr
 
 
 def _parse_format_a(ws, ws_fmt, images_by_row: dict, cols: dict) -> List[dict]:
@@ -429,6 +435,9 @@ def _parse_format_a(ws, ws_fmt, images_by_row: dict, cols: dict) -> List[dict]:
       - Row N = TODDLER summary: OH/WIP/Total in detected columns
       - Row N+1 = BOYS 4-7 summary: col A = CATEGORY NAME, label='4-7', OH/WIP/Total
     Only include categories with the standard TODDLER/4-7 header pattern.
+
+    Format A maps "TODDLER" -> "TODDLER BOY" and "4-7" -> "4-7 BOY" in the
+    new size_ranges structure.
     """
     label_col = cols["summary_label_col"]
     oh_col = cols["oh"]
@@ -487,7 +496,7 @@ def _parse_format_a(ws, ws_fmt, images_by_row: dict, cols: dict) -> List[dict]:
             data_end = ws.max_row
 
         # Extract REF#s from style rows in this range
-        toddler_refs, boys47_refs = _extract_refs_between_rows(ws, data_start, data_end, cols)
+        refs_by_sr = _extract_refs_between_rows(ws, data_start, data_end, cols)
 
         # Parse blocks in this range
         blocks = _parse_blocks_in_range(ws, data_start, data_end, images_by_row, cols)
@@ -495,18 +504,22 @@ def _parse_format_a(ws, ws_fmt, images_by_row: dict, cols: dict) -> List[dict]:
         tod_oh, tod_wip, tod_total = cs["tod_oh"], cs["tod_wip"], cs["tod_total"]
         b47_oh, b47_wip, b47_total = cs["b47_oh"], cs["b47_wip"], cs["b47_total"]
 
-        # Skip toddler row if all zeros
-        if tod_oh == 0 and tod_wip == 0 and tod_total == 0:
-            toddler_refs = []
+        # Build size_ranges dict — Format A maps TODDLER -> TODDLER BOY, 4-7 -> 4-7 BOY
+        size_ranges = OrderedDict()
+        if tod_oh > 0 or tod_wip > 0 or tod_total > 0 or refs_by_sr.get("TODDLER BOY"):
+            size_ranges["TODDLER BOY"] = {
+                "oh": tod_oh, "wip": tod_wip, "total": tod_total,
+                "refs": refs_by_sr.get("TODDLER BOY", []),
+            }
+        if b47_oh > 0 or b47_wip > 0 or b47_total > 0 or refs_by_sr.get("4-7 BOY"):
+            size_ranges["4-7 BOY"] = {
+                "oh": b47_oh, "wip": b47_wip, "total": b47_total,
+                "refs": refs_by_sr.get("4-7 BOY", []),
+            }
 
         categories.append({
             "name": cs["name"],
-            "toddler_oh": tod_oh, "toddler_wip": tod_wip,
-            "toddler_total": tod_total,
-            "boys47_oh": b47_oh, "boys47_wip": b47_wip,
-            "boys47_total": b47_total,
-            "toddler_refs": toddler_refs,
-            "boys47_refs": boys47_refs,
+            "size_ranges": size_ranges,
             "blocks": blocks,
         })
 
@@ -519,7 +532,7 @@ def _parse_format_b(ws, ws_fmt, images_by_row: dict, cols: dict) -> List[dict]:
     Category detection: Scan column A for non-empty cells that are NOT
     'ATS RECAP' and NOT blank. Each such cell is a category name.
 
-    OH/WIP: SUM individual style detail rows grouped by size prefix.
+    OH/WIP: SUM individual style detail rows grouped by size range (all 10).
     """
     style_col = cols["style"]
     oh_col = cols["oh"]
@@ -555,14 +568,14 @@ def _parse_format_b(ws, ws_fmt, images_by_row: dict, cols: dict) -> List[dict]:
         data_end = category_rows[cat_idx + 1][0] - 1 if cat_idx + 1 < len(category_rows) else ws.max_row
 
         # Extract REF#s
-        toddler_refs, boys47_refs = _extract_refs_between_rows(ws, data_start, data_end, cols)
+        refs_by_sr = _extract_refs_between_rows(ws, data_start, data_end, cols)
 
         # Parse blocks
         blocks = _parse_blocks_in_range(ws, data_start, data_end, images_by_row, cols)
 
-        # Compute OH/WIP from individual style rows by size prefix
-        tod_oh, tod_wip = 0, 0
-        b47_oh, b47_wip = 0, 0
+        # Compute OH/WIP from individual style rows by size range
+        sr_oh = defaultdict(int)
+        sr_wip = defaultdict(int)
 
         for r in range(data_start, data_end + 1):
             c_val = _safe_str(ws.cell(row=r, column=style_col).value)
@@ -579,33 +592,29 @@ def _parse_format_b(ws, ws_fmt, images_by_row: dict, cols: dict) -> List[dict]:
             wip = _safe_num(ws.cell(row=r, column=wip_col).value)
 
             sr = size_range_from_style(c_val)
-            if sr == "TODDLER":
-                tod_oh += oh
-                tod_wip += wip
-            elif sr == "BOYS 4-7":
-                b47_oh += oh
-                b47_wip += wip
-            else:
-                # Unknown size prefix (non-Nike/Jordan brands like Hurley)
-                # Put into boys47 so it shows in the recap
-                b47_oh += oh
-                b47_wip += wip
+            if sr != "UNKNOWN":
+                sr_oh[sr] += oh
+                sr_wip[sr] += wip
 
-        tod_total = tod_oh + tod_wip
-        b47_total = b47_oh + b47_wip
-
-        # Skip toddler row if all zeros
-        if tod_oh == 0 and tod_wip == 0 and tod_total == 0:
-            toddler_refs = []
+        # Build size_ranges dict — only include size ranges with data or refs
+        size_ranges = OrderedDict()
+        # Collect all size range names from both OH/WIP data and refs
+        all_sr_names = list(OrderedDict.fromkeys(
+            list(sr_oh.keys()) + list(sr_wip.keys()) + list(refs_by_sr.keys())
+        ))
+        for sr_name in all_sr_names:
+            oh_val = sr_oh.get(sr_name, 0)
+            wip_val = sr_wip.get(sr_name, 0)
+            refs = refs_by_sr.get(sr_name, [])
+            if oh_val > 0 or wip_val > 0 or refs:
+                size_ranges[sr_name] = {
+                    "oh": oh_val, "wip": wip_val, "total": oh_val + wip_val,
+                    "refs": refs,
+                }
 
         categories.append({
             "name": cat_name,
-            "toddler_oh": tod_oh, "toddler_wip": tod_wip,
-            "toddler_total": tod_total,
-            "boys47_oh": b47_oh, "boys47_wip": b47_wip,
-            "boys47_total": b47_total,
-            "toddler_refs": toddler_refs,
-            "boys47_refs": boys47_refs,
+            "size_ranges": size_ranges,
             "blocks": blocks,
         })
 
@@ -619,22 +628,31 @@ def _merge_same_name_categories(categories: List[dict]) -> List[dict]:
         name = cat["name"]
         if name in merged:
             existing = merged[name]
-            existing["toddler_oh"] += cat["toddler_oh"]
-            existing["toddler_wip"] += cat["toddler_wip"]
-            existing["toddler_total"] += cat["toddler_total"]
-            existing["boys47_oh"] += cat["boys47_oh"]
-            existing["boys47_wip"] += cat["boys47_wip"]
-            existing["boys47_total"] += cat["boys47_total"]
-            # Merge refs preserving order and uniqueness
-            for ref in cat["toddler_refs"]:
-                if ref not in existing["toddler_refs"]:
-                    existing["toddler_refs"].append(ref)
-            for ref in cat["boys47_refs"]:
-                if ref not in existing["boys47_refs"]:
-                    existing["boys47_refs"].append(ref)
+            # Merge size_ranges
+            for sr_name, sr_data in cat["size_ranges"].items():
+                if sr_name in existing["size_ranges"]:
+                    ex_sr = existing["size_ranges"][sr_name]
+                    ex_sr["oh"] += sr_data["oh"]
+                    ex_sr["wip"] += sr_data["wip"]
+                    ex_sr["total"] += sr_data["total"]
+                    for ref in sr_data["refs"]:
+                        if ref not in ex_sr["refs"]:
+                            ex_sr["refs"].append(ref)
+                else:
+                    existing["size_ranges"][sr_name] = {
+                        "oh": sr_data["oh"], "wip": sr_data["wip"],
+                        "total": sr_data["total"], "refs": list(sr_data["refs"]),
+                    }
             existing["blocks"].extend(cat["blocks"])
         else:
-            merged[name] = {**cat}  # shallow copy
+            # Deep copy size_ranges to avoid mutation
+            sr_copy = OrderedDict()
+            for sr_name, sr_data in cat["size_ranges"].items():
+                sr_copy[sr_name] = {
+                    "oh": sr_data["oh"], "wip": sr_data["wip"],
+                    "total": sr_data["total"], "refs": list(sr_data["refs"]),
+                }
+            merged[name] = {**cat, "size_ranges": sr_copy}
     return list(merged.values())
 
 
@@ -777,10 +795,11 @@ def parse_ats_file(file_bytes: bytes) -> dict:
                 "brand": str,
                 "categories": list of {
                     "name": str,
-                    "toddler_oh": int, "toddler_wip": int, "toddler_total": int,
-                    "boys47_oh": int, "boys47_wip": int, "boys47_total": int,
-                    "toddler_refs": [str, ...],  # unique REF#s from toddler styles
-                    "boys47_refs": [str, ...],    # unique REF#s from boys 4-7 styles
+                    "size_ranges": OrderedDict({
+                        "TODDLER BOY": {"oh": int, "wip": int, "total": int, "refs": [str]},
+                        "4-7 BOY": {"oh": int, "wip": int, "total": int, "refs": [str]},
+                        ...
+                    }),
                     "blocks": [block_dict, ...],
                 },
                 "all_ref_nums": [str, ...],
@@ -848,12 +867,13 @@ def parse_ats_file(file_bytes: bytes) -> dict:
             logger.info(f"Sheet '{sheet_name}': Format B detected (no summary headers)")
             categories = _parse_format_b(ws, ws_fmt, images_by_row, cols)
 
-        # Collect all ref nums
+        # Collect all ref nums from all size ranges
         all_ref_nums = []
         for cat in categories:
-            for r in cat["toddler_refs"] + cat["boys47_refs"]:
-                if r not in all_ref_nums:
-                    all_ref_nums.append(r)
+            for sr_data in cat["size_ranges"].values():
+                for r in sr_data["refs"]:
+                    if r not in all_ref_nums:
+                        all_ref_nums.append(r)
 
         if categories:
             logger.info(f"Sheet '{sheet_name}': {len(categories)} categories: "
@@ -911,43 +931,47 @@ def filter_blocks(blocks: list, min_units: int = 120, max_units: int = None) -> 
 
 
 def filter_categories(categories: list, min_units: int = 120, max_units: int = None) -> list:
-    """Filter all categories' blocks. Recompute ref#s after filtering."""
+    """Filter all categories' blocks. Recompute size_ranges after filtering."""
     result = []
     for cat in categories:
         fblocks = filter_blocks(cat["blocks"], min_units, max_units)
         if fblocks:
-            # Recompute refs after filtering
-            tod_refs, b47_refs = [], []
+            # Recompute refs and OH/WIP per size range from filtered data
+            sr_refs = defaultdict(list)
+            sr_oh = defaultdict(int)
+            sr_wip = defaultdict(int)
+
             for block in fblocks:
                 for r in block["rows"]:
                     if r.get("is_label_row"):
                         ref = r.get("ref_num", "")
                         sr = r.get("size_range", "")
-                        if sr == "TODDLER" and ref and ref not in tod_refs:
-                            tod_refs.append(ref)
-                        elif ref and ref not in b47_refs:
-                            # BOYS 4-7 and UNKNOWN both go to boys47
-                            b47_refs.append(ref)
+                        if sr and sr != "UNKNOWN" and ref:
+                            if ref not in sr_refs[sr]:
+                                sr_refs[sr].append(ref)
+                            sr_oh[sr] += r["oh"]
+                            sr_wip[sr] += r["wip"]
 
-            # Recompute OH/WIP from filtered data
-            tod_oh = sum(r["oh"] for b in fblocks for r in b["rows"]
-                        if r.get("is_label_row") and r.get("size_range") == "TODDLER")
-            tod_wip = sum(r["wip"] for b in fblocks for r in b["rows"]
-                         if r.get("is_label_row") and r.get("size_range") == "TODDLER")
-            b47_oh = sum(r["oh"] for b in fblocks for r in b["rows"]
-                        if r.get("is_label_row") and r.get("size_range") in ("BOYS 4-7", "UNKNOWN"))
-            b47_wip = sum(r["wip"] for b in fblocks for r in b["rows"]
-                         if r.get("is_label_row") and r.get("size_range") in ("BOYS 4-7", "UNKNOWN"))
+            # Build new size_ranges
+            size_ranges = OrderedDict()
+            all_sr_names = list(OrderedDict.fromkeys(
+                list(sr_oh.keys()) + list(sr_refs.keys())
+            ))
+            for sr_name in all_sr_names:
+                oh_val = sr_oh.get(sr_name, 0)
+                wip_val = sr_wip.get(sr_name, 0)
+                refs = sr_refs.get(sr_name, [])
+                if oh_val > 0 or wip_val > 0 or refs:
+                    size_ranges[sr_name] = {
+                        "oh": oh_val, "wip": wip_val,
+                        "total": oh_val + wip_val,
+                        "refs": refs,
+                    }
 
             result.append({
                 **cat,
                 "blocks": fblocks,
-                "toddler_refs": tod_refs,
-                "boys47_refs": b47_refs,
-                "toddler_oh": tod_oh, "toddler_wip": tod_wip,
-                "toddler_total": tod_oh + tod_wip,
-                "boys47_oh": b47_oh, "boys47_wip": b47_wip,
-                "boys47_total": b47_oh + b47_wip,
+                "size_ranges": size_ranges,
             })
     return result
 
@@ -955,7 +979,10 @@ def filter_categories(categories: list, min_units: int = 120, max_units: int = N
 # --- Recap Data Builder --------------------------------------------------------
 
 def get_recap_data(categories_by_sheet: dict) -> list:
-    """Build recap data for the RECAP tab."""
+    """Build recap data for the RECAP tab.
+
+    Generates one row per size range per category (all 10 possible size ranges).
+    """
     recap_sections = []
     for sheet_name, sheet_info in categories_by_sheet.items():
         brand = sheet_info["brand"]
@@ -970,27 +997,18 @@ def get_recap_data(categories_by_sheet: dict) -> list:
             # Unique ID per category entry so same-named categories stay separate
             cat_id = f"{sheet_name}_{cat_idx}"
 
-            # Toddler row — always show, even if zeros
-            tod_oh, tod_wip = cat["toddler_oh"], cat["toddler_wip"]
-            ref_str = ", ".join(cat["toddler_refs"])
-            section_rows.append({
-                "size_range": "TODDLER", "category": cat_name,
-                "cat_id": cat_id,
-                "ref_nums": ref_str, "oh": tod_oh, "wip": tod_wip,
-            })
-            total_oh += tod_oh
-            total_wip += tod_wip
-
-            # Boys 4-7 row — always show, even if zeros
-            b47_oh, b47_wip = cat["boys47_oh"], cat["boys47_wip"]
-            ref_str = ", ".join(cat["boys47_refs"])
-            section_rows.append({
-                "size_range": "BOYS 4-7", "category": cat_name,
-                "cat_id": cat_id,
-                "ref_nums": ref_str, "oh": b47_oh, "wip": b47_wip,
-            })
-            total_oh += b47_oh
-            total_wip += b47_wip
+            # One row per size range that exists for this category
+            for sr_name, sr_data in cat["size_ranges"].items():
+                sr_oh = sr_data["oh"]
+                sr_wip = sr_data["wip"]
+                ref_str = ", ".join(sr_data["refs"])
+                section_rows.append({
+                    "size_range": sr_name, "category": cat_name,
+                    "cat_id": cat_id,
+                    "ref_nums": ref_str, "oh": sr_oh, "wip": sr_wip,
+                })
+                total_oh += sr_oh
+                total_wip += sr_wip
 
         recap_sections.append({
             "brand_label": brand_label, "brand": brand,
