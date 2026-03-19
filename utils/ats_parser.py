@@ -925,7 +925,8 @@ def filter_categories(categories: list, min_units: int = 120, max_units: int = N
                         sr = r.get("size_range", "")
                         if sr == "TODDLER" and ref and ref not in tod_refs:
                             tod_refs.append(ref)
-                        elif sr == "BOYS 4-7" and ref and ref not in b47_refs:
+                        elif ref and ref not in b47_refs:
+                            # BOYS 4-7 and UNKNOWN both go to boys47
                             b47_refs.append(ref)
 
             # Recompute OH/WIP from filtered data
@@ -934,9 +935,9 @@ def filter_categories(categories: list, min_units: int = 120, max_units: int = N
             tod_wip = sum(r["wip"] for b in fblocks for r in b["rows"]
                          if r.get("is_label_row") and r.get("size_range") == "TODDLER")
             b47_oh = sum(r["oh"] for b in fblocks for r in b["rows"]
-                        if r.get("is_label_row") and r.get("size_range") == "BOYS 4-7")
+                        if r.get("is_label_row") and r.get("size_range") in ("BOYS 4-7", "UNKNOWN"))
             b47_wip = sum(r["wip"] for b in fblocks for r in b["rows"]
-                         if r.get("is_label_row") and r.get("size_range") == "BOYS 4-7")
+                         if r.get("is_label_row") and r.get("size_range") in ("BOYS 4-7", "UNKNOWN"))
 
             result.append({
                 **cat,
