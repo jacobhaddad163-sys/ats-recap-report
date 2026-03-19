@@ -26,7 +26,10 @@ from collections import defaultdict, OrderedDict
 from typing import Dict, List, Tuple
 
 import openpyxl
-from PIL import Image
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 logger = logging.getLogger(__name__)
 MAX_IMAGE_SIZE = 10 * 1024 * 1024
@@ -208,6 +211,9 @@ def _extract_images(file_bytes: bytes) -> Dict[str, Dict[int, bytes]]:
                             continue
                         data = zf.read(ipath)
                         try:
+                            if Image is None:
+                                product_imgs[row_1] = data
+                                continue
                             img = Image.open(io.BytesIO(data))
                             if img.size[0] > 100 and img.size[1] > 100:
                                 product_imgs[row_1] = data
