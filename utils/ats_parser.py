@@ -447,7 +447,10 @@ def filter_blocks(blocks: list, min_units: int = 120, max_units: int = None) -> 
                     else:
                         i += 1
                 else:
-                    i += 2 if ratio else i + 1
+                    if ratio:
+                        i += 2
+                    else:
+                        i += 1
             else:
                 i += 1
         if frows:

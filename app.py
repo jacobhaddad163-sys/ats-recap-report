@@ -229,9 +229,9 @@ if st.button("Generate ATS Recap Report", type="primary", key="generate_btn"):
                 st.success("Report generated successfully!")
                 logger.info(f"Report: {report_title} by {user_name}, removed {total_removed}")
 
-            except Exception:
+            except Exception as e:
                 logger.exception("Generation failed")
-                st.error("Failed to generate report. Please verify your file and settings.")
+                st.error(f"Failed to generate report: {e}")
 
 if "output_excel" in st.session_state:
     safe_fn = sanitize_text(st.session_state.get("output_filename", "ATS_RECAP.xlsx"), max_length=100)
