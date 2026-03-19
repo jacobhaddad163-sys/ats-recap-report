@@ -98,23 +98,23 @@ def _write_category_summary(ws, row: int, label: str, oh: int, wip: int,
     if label == "4-7":
         cell.number_format = TEXT_FMT
 
-    # Column L: OH — accounting format shows dash for zero
+    # Column L: OH — not bold, accounting format shows dash for zero
     cell = ws.cell(row=row, column=12, value=oh)
-    cell.font = BOLD_FONT
+    cell.font = NORMAL_FONT
     cell.alignment = CENTER_ALIGN
     cell.number_format = ACCT_NUM_FMT
     cell.border = THIN_BORDER
 
-    # Column M: WIP — accounting format shows dash for zero
+    # Column M: WIP — not bold, accounting format shows dash for zero
     cell = ws.cell(row=row, column=13, value=wip)
-    cell.font = BOLD_FONT
+    cell.font = NORMAL_FONT
     cell.alignment = CENTER_ALIGN
     cell.number_format = ACCT_NUM_FMT
     cell.border = THIN_BORDER
 
-    # Column N: Total
+    # Column N: Total — not bold
     cell = ws.cell(row=row, column=14, value=oh + wip)
-    cell.font = BOLD_FONT
+    cell.font = NORMAL_FONT
     cell.alignment = CENTER_ALIGN
     cell.number_format = ACCT_NUM_FMT
     cell.border = THIN_BORDER
@@ -335,9 +335,7 @@ def write_detail_sheet(ws, categories: list, report_date: date = None):
         b47_oh, b47_wip = cat["boys47_oh"], cat["boys47_wip"]
         blocks = cat["blocks"]
 
-        has_toddler = (tod_oh > 0 or tod_wip > 0)
-        has_boys47 = (b47_oh > 0 or b47_wip > 0)
-        if not has_toddler and not has_boys47:
+        if not blocks:
             continue
 
         # OH/WIP/TOTAL column sub-headers (yellow) — aligned above data columns
@@ -352,17 +350,14 @@ def write_detail_sheet(ws, categories: list, report_date: date = None):
         ws.cell(row=current_row, column=11).border = THIN_BORDER
         current_row += 1
 
-        # TODDLER summary row
-        if has_toddler:
-            _write_category_summary(ws, current_row, "TODDLER", tod_oh, tod_wip,
-                                     is_category_row=not has_boys47, category_name=cat_name)
-            current_row += 1
+        # TODDLER summary row — always show, even if zeros
+        _write_category_summary(ws, current_row, "TODDLER", tod_oh, tod_wip)
+        current_row += 1
 
-        # 4-7 summary row (category name goes here if both exist)
-        if has_boys47:
-            _write_category_summary(ws, current_row, "4-7", b47_oh, b47_wip,
-                                     is_category_row=True, category_name=cat_name)
-            current_row += 1
+        # 4-7 summary row — always show, category name goes here
+        _write_category_summary(ws, current_row, "4-7", b47_oh, b47_wip,
+                                 is_category_row=True, category_name=cat_name)
+        current_row += 1
 
         # Write all style blocks for this category
         for block in blocks:

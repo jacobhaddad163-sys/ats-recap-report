@@ -840,29 +840,27 @@ def get_recap_data(categories_by_sheet: dict) -> list:
             # Unique ID per category entry so same-named categories stay separate
             cat_id = f"{sheet_name}_{cat_idx}"
 
-            # Toddler row (only if non-zero)
+            # Toddler row — always show, even if zeros
             tod_oh, tod_wip = cat["toddler_oh"], cat["toddler_wip"]
-            if tod_oh > 0 or tod_wip > 0:
-                ref_str = ", ".join(cat["toddler_refs"])
-                section_rows.append({
-                    "size_range": "TODDLER", "category": cat_name,
-                    "cat_id": cat_id,
-                    "ref_nums": ref_str, "oh": tod_oh, "wip": tod_wip,
-                })
-                total_oh += tod_oh
-                total_wip += tod_wip
+            ref_str = ", ".join(cat["toddler_refs"])
+            section_rows.append({
+                "size_range": "TODDLER", "category": cat_name,
+                "cat_id": cat_id,
+                "ref_nums": ref_str, "oh": tod_oh, "wip": tod_wip,
+            })
+            total_oh += tod_oh
+            total_wip += tod_wip
 
-            # Boys 4-7 row (only if non-zero)
+            # Boys 4-7 row — always show, even if zeros
             b47_oh, b47_wip = cat["boys47_oh"], cat["boys47_wip"]
-            if b47_oh > 0 or b47_wip > 0:
-                ref_str = ", ".join(cat["boys47_refs"])
-                section_rows.append({
-                    "size_range": "BOYS 4-7", "category": cat_name,
-                    "cat_id": cat_id,
-                    "ref_nums": ref_str, "oh": b47_oh, "wip": b47_wip,
-                })
-                total_oh += b47_oh
-                total_wip += b47_wip
+            ref_str = ", ".join(cat["boys47_refs"])
+            section_rows.append({
+                "size_range": "BOYS 4-7", "category": cat_name,
+                "cat_id": cat_id,
+                "ref_nums": ref_str, "oh": b47_oh, "wip": b47_wip,
+            })
+            total_oh += b47_oh
+            total_wip += b47_wip
 
         recap_sections.append({
             "brand_label": brand_label, "brand": brand,
