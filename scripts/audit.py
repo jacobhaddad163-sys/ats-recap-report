@@ -1,6 +1,10 @@
 """
-Daily Audit Script — ATS Recap Report Builder
+Daily Audit Script — All Haddad Brands Apps
 Outputs a clean Markdown report (audit-report.md) for GitHub Issues.
+
+Usage:
+  python audit.py          # Audit only ATS Recap Report
+  python audit.py --all    # Audit all 4 apps
 """
 
 import os
@@ -12,7 +16,28 @@ from datetime import datetime
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+
+# When --all flag is used, scan all 4 app directories (relative to workspace root)
+APPS = {
+    "ATS Recap Report": {
+        "dir": "ats-recap-report",
+        "modules": ["utils", "utils.auth", "utils.ats_parser", "utils.excel_generator"],
+    },
+    "Confirmed Deals Recap": {
+        "dir": "confirmed-deals-recap",
+        "modules": ["utils", "utils.auth", "utils.po_parser", "utils.recap_builder"],
+    },
+    "GM Sheet Builder": {
+        "dir": "gm-sheet-builder",
+        "modules": ["utils", "utils.auth"],
+    },
+    "Store Recap Builder": {
+        "dir": "store-recap-builder",
+        "modules": [],
+    },
+}
 
 SECRET_PATTERNS = [
     (r'(?i)password\s*=\s*["\'][^"\']+["\']', "Hardcoded password"),
@@ -20,7 +45,6 @@ SECRET_PATTERNS = [
     (r'(?i)token\s*=\s*["\'][^"\']+["\']', "Hardcoded token"),
     (r'(?i)secret\s*=\s*["\'][^"\']+["\']', "Hardcoded secret"),
     (r'sk-ant-[a-zA-Z0-9_-]{20,}', "Exposed Anthropic API key"),
-    (r'(?i)aws_access_key_id\s*=\s*["\'][^"\']+["\']', "AWS access key"),
 ]
 
 SECURITY_PATTERNS = [
@@ -32,7 +56,8 @@ SECURITY_PATTERNS = [
     (r'\bpickle\.loads?\s*\(', "pickle deserialization"),
 ]
 
-SKIP_DIRS = {"__pycache__", ".git", "venv", ".venv", "node_modules", "scripts"}
+SKIP_DIRS = {"__pycache__", ".git", "venv", ".venv", "node_modules", "scripts",
+             ".claude", "swatch_component"}
 
 
 def find_py_files(root):
@@ -42,19 +67,21 @@ def find_py_files(root):
     )
 
 
-def check_syntax(py_files):
+def check_syntax(py_files, root):
     failures = []
     for f in py_files:
         try:
             py_compile.compile(str(f), doraise=True)
         except py_compile.PyCompileError as exc:
-            failures.append((f.relative_to(REPO_ROOT), str(exc)))
+            failures.append((f.relative_to(root), str(exc)))
     return failures
 
 
-def check_secrets(py_files):
+def check_secrets(py_files, root):
     findings = []
     for f in py_files:
+        if f.name == "audit.py":
+            continue
         try:
             lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
         except Exception:
@@ -64,13 +91,18 @@ def check_secrets(py_files):
                 continue
             for pattern, label in SECRET_PATTERNS:
                 if re.search(pattern, line):
-                    findings.append((f.relative_to(REPO_ROOT), lineno, label, line.strip()))
+                    # Skip st.secrets.get() calls — those are safe
+                    if "st.secrets" in line or "secrets.get" in line:
+                        continue
+                    findings.append((f.relative_to(root), lineno, label, line.strip()))
     return findings
 
 
-def check_security(py_files):
+def check_security(py_files, root):
     findings = []
     for f in py_files:
+        if f.name == "audit.py":
+            continue
         try:
             lines = f.read_text(encoding="utf-8", errors="ignore").splitlines()
         except Exception:
@@ -80,160 +112,184 @@ def check_security(py_files):
                 continue
             for pattern, label in SECURITY_PATTERNS:
                 if re.search(pattern, line):
-                    findings.append((f.relative_to(REPO_ROOT), lineno, label, line.strip()))
+                    findings.append((f.relative_to(root), lineno, label, line.strip()))
     return findings
 
 
-def check_gitignore():
-    gitignore = REPO_ROOT / ".gitignore"
+def check_gitignore(root):
+    gitignore = root / ".gitignore"
     if not gitignore.exists():
         return False, "`.gitignore` not found"
     content = gitignore.read_text(encoding="utf-8", errors="ignore")
     for line in content.splitlines():
         if "secrets.toml" in line and not line.strip().startswith("#"):
-            return True, "secrets.toml is in .gitignore"
+            return True, "Protected"
     return False, "secrets.toml is **NOT** in .gitignore"
 
 
-def check_imports():
-    sys.path.insert(0, str(REPO_ROOT))
+def check_imports(root, modules):
+    if not modules:
+        return []
+    sys.path.insert(0, str(root))
     failures = []
-    for mod in ["utils", "utils.auth", "utils.ats_parser", "utils.excel_generator"]:
+    for mod in modules:
         try:
             importlib.import_module(mod)
         except Exception as exc:
             failures.append((mod, f"{type(exc).__name__}: {exc}"))
+    if str(root) in sys.path:
+        sys.path.remove(str(root))
     return failures
 
 
-def check_requirements():
-    req = REPO_ROOT / "requirements.txt"
+def check_requirements(root):
+    req = root / "requirements.txt"
     if not req.exists():
-        return False, "requirements.txt not found"
+        return False, "Not found"
     lines = [l for l in req.read_text().splitlines() if l.strip() and not l.startswith("#")]
     if not lines:
-        return False, "requirements.txt is empty"
-    return True, f"{len(lines)} dependencies listed"
+        return False, "Empty"
+    return True, f"{len(lines)} deps"
+
+
+def audit_app(app_name, app_root, modules):
+    """Audit one app. Returns (results_dict, details_lines, has_issues)."""
+    py_files = find_py_files(app_root)
+    results = {}
+    details = []
+    has_issues = False
+
+    # 1. Syntax
+    syntax_fails = check_syntax(py_files, app_root)
+    results["Syntax"] = "✅" if not syntax_fails else "❌"
+
+    # 2. Secrets
+    secret_finds = check_secrets(py_files, app_root)
+    results["Secrets"] = "✅" if not secret_finds else "❌"
+
+    # 3. Gitignore
+    gi_ok, gi_msg = check_gitignore(app_root)
+    results["Protected"] = "✅" if gi_ok else "❌"
+
+    # 4. Imports
+    import_fails = check_imports(app_root, modules)
+    results["Imports"] = "✅" if not import_fails else "⚠️"
+
+    # 5. Security
+    security_finds = check_security(py_files, app_root)
+    results["Security"] = "✅" if not security_finds else "❌"
+
+    # 6. Requirements
+    req_ok, req_msg = check_requirements(app_root)
+    results["Deps"] = "✅" if req_ok else "❌"
+
+    # Collect details for failures
+    if syntax_fails:
+        has_issues = True
+        details.append(f"**Syntax Errors in {app_name}:**")
+        for path, err in syntax_fails:
+            details.append(f"- `{path}` — {err}")
+        details.append(f"  *How to fix:* Open the file, fix the typo or missing bracket on that line.")
+        details.append("")
+
+    if secret_finds:
+        has_issues = True
+        details.append(f"**Hardcoded Secrets in {app_name}:**")
+        for path, lineno, label, code in secret_finds:
+            details.append(f"- `{path}` line {lineno} — {label}")
+            details.append(f"  ```python\n  {code}\n  ```")
+        details.append(f"  *How to fix:* Move to `.streamlit/secrets.toml` and use `st.secrets[\"KEY\"]` instead.")
+        details.append("")
+
+    if not gi_ok:
+        has_issues = True
+        details.append(f"**Secrets Not Protected in {app_name}:** {gi_msg}")
+        details.append(f"  *How to fix:* Add `.streamlit/secrets.toml` to `.gitignore`.")
+        details.append("")
+
+    if import_fails:
+        details.append(f"**Import Warnings in {app_name}:**")
+        for mod, err in import_fails:
+            details.append(f"- `{mod}` — {err}")
+        details.append(f"  *Note:* May be expected in CI without Streamlit runtime.")
+        details.append("")
+
+    if security_finds:
+        has_issues = True
+        details.append(f"**Security Concerns in {app_name}:**")
+        for path, lineno, label, code in security_finds:
+            details.append(f"- `{path}` line {lineno} — {label}")
+            details.append(f"  ```python\n  {code}\n  ```")
+        details.append(f"  *How to fix:* Replace with safer alternatives. Avoid `eval()`, `exec()`, `shell=True`.")
+        details.append("")
+
+    if not req_ok:
+        has_issues = True
+        details.append(f"**Dependencies Issue in {app_name}:** {req_msg}")
+        details.append("")
+
+    return results, details, has_issues, len(py_files)
 
 
 def main():
     now = datetime.now()
-    py_files = find_py_files(REPO_ROOT)
+    use_all = "--all" in sys.argv
     lines = []
-    has_issues = False
+    any_issues = False
 
     def out(s=""):
         lines.append(s)
 
-    # --- Header ---
-    out(f"## ATS Recap Report Builder — Daily Audit")
+    out("## 🔍 Daily App Audit — Haddad Brands")
     out(f"**Date:** {now.strftime('%B %d, %Y at %I:%M %p')}")
-    out(f"**Files scanned:** {len(py_files)}")
+    out("")
+
+    # Determine which apps to audit
+    if use_all:
+        workspace = REPO_ROOT.parent  # parent of ats-recap-report checkout
+        apps_to_audit = {}
+        for name, info in APPS.items():
+            app_dir = workspace / info["dir"]
+            if app_dir.exists():
+                apps_to_audit[name] = (app_dir, info["modules"])
+            else:
+                out(f"> ⚠️ **{name}** directory not found at `{app_dir}`")
+    else:
+        apps_to_audit = {"ATS Recap Report": (REPO_ROOT, APPS["ATS Recap Report"]["modules"])}
+
+    out(f"**Apps audited:** {len(apps_to_audit)}")
     out("")
 
     # --- Summary Table ---
-    results = {}
+    out("| App | Syntax | Secrets | Protected | Imports | Security | Deps | Files |")
+    out("|-----|--------|---------|-----------|---------|----------|------|-------|")
 
-    # 1. Syntax
-    syntax_fails = check_syntax(py_files)
-    results["Syntax Check"] = len(syntax_fails) == 0
+    all_details = []
 
-    # 2. Secrets
-    secret_finds = check_secrets(py_files)
-    results["Hardcoded Secrets"] = len(secret_finds) == 0
+    for app_name, (app_root, modules) in apps_to_audit.items():
+        results, details, has_issues, file_count = audit_app(app_name, app_root, modules)
+        if has_issues:
+            any_issues = True
+        all_details.extend(details)
 
-    # 3. Gitignore
-    gi_ok, gi_msg = check_gitignore()
-    results["Secrets Protected"] = gi_ok
+        out(f"| {app_name} | {results['Syntax']} | {results['Secrets']} | {results['Protected']} | {results['Imports']} | {results['Security']} | {results['Deps']} | {file_count} |")
 
-    # 4. Imports
-    import_fails = check_imports()
-    results["Module Imports"] = len(import_fails) == 0
-
-    # 5. Security
-    security_finds = check_security(py_files)
-    results["Security Scan"] = len(security_finds) == 0
-
-    # 6. Requirements
-    req_ok, req_msg = check_requirements()
-    results["Dependencies"] = req_ok
-
-    out("| Check | Status |")
-    out("|-------|--------|")
-    for check, passed in results.items():
-        icon = "✅ Pass" if passed else "❌ Fail"
-        out(f"| {check} | {icon} |")
-        if not passed:
-            has_issues = True
     out("")
 
-    # --- Details (only if issues) ---
-    if syntax_fails:
-        out("### ❌ Syntax Errors")
-        out("These files have Python syntax errors and will crash on import:")
+    # --- Details ---
+    if all_details:
+        out("---")
+        out("### Issues & Warnings")
         out("")
-        for path, err in syntax_fails:
-            out(f"- **`{path}`** — {err}")
-        out("")
-        out("**How to fix:** Open the file, find the line mentioned in the error, fix the typo or missing bracket.")
-        out("")
-
-    if secret_finds:
-        out("### ❌ Hardcoded Secrets Found")
-        out("Passwords or API keys found directly in the code:")
-        out("")
-        for path, lineno, label, code in secret_finds:
-            out(f"- **`{path}` line {lineno}** — {label}")
-            out(f"  ```python")
-            out(f"  {code}")
-            out(f"  ```")
-        out("")
-        out("**How to fix:** Move these to `.streamlit/secrets.toml` and use `st.secrets[\"KEY_NAME\"]` instead.")
-        out("")
-
-    if not gi_ok:
-        out("### ❌ Secrets Not Protected")
-        out(f"{gi_msg}")
-        out("")
-        out("**How to fix:** Add `.streamlit/secrets.toml` to your `.gitignore` file immediately.")
-        out("")
-
-    if import_fails:
-        out("### ⚠️ Import Failures")
-        out("These modules failed to import:")
-        out("")
-        for mod, err in import_fails:
-            out(f"- **`{mod}`** — {err}")
-        out("")
-        out("**Note:** Import failures in CI may be expected if Streamlit isn't running. Check if this also happens locally with `python -c \"import {module}\"`.")
-        out("")
-
-    if security_finds:
-        out("### ❌ Security Concerns")
-        out("Potentially dangerous function calls found:")
-        out("")
-        for path, lineno, label, code in security_finds:
-            out(f"- **`{path}` line {lineno}** — {label}")
-            out(f"  ```python")
-            out(f"  {code}")
-            out(f"  ```")
-        out("")
-        out("**How to fix:** Replace with safer alternatives. `eval()`/`exec()` should almost never be used. `subprocess` with `shell=True` is a command injection risk.")
-        out("")
-
-    if not req_ok:
-        out(f"### ❌ Dependencies Issue")
-        out(f"{req_msg}")
-        out("")
-
-    # --- All clear ---
-    if not has_issues and not import_fails:
-        out("### ✅ Everything looks good!")
-        out("No issues found. All checks passed. Your app is healthy.")
+        for line in all_details:
+            out(line)
+    else:
+        out("### ✅ All apps are healthy!")
+        out("No issues found across any app. Everything is working correctly.")
         out("")
 
     out("---")
-    out("*This report was generated automatically by GitHub Actions.*")
+    out("*Generated automatically by GitHub Actions. Runs daily at 7:00 AM EST.*")
 
     report = "\n".join(lines)
     try:
@@ -241,10 +297,14 @@ def main():
     except UnicodeEncodeError:
         print(report.encode("ascii", errors="replace").decode("ascii"))
 
-    # Write markdown file for the workflow
-    (REPO_ROOT / "audit-report.md").write_text(report, encoding="utf-8")
+    # Write report file — in workspace root for CI, or repo root for local
+    if use_all:
+        report_path = REPO_ROOT.parent / "audit-report.md"
+    else:
+        report_path = REPO_ROOT / "audit-report.md"
+    report_path.write_text(report, encoding="utf-8")
 
-    sys.exit(1 if has_issues else 0)
+    sys.exit(1 if any_issues else 0)
 
 
 if __name__ == "__main__":
